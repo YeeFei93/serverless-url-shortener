@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>URL Shortener</title>
+  <meta charset="UTF-8">
+</head>
+<body>
+  <h1>Simple URL Shortener</h1>
+  <input type="text" id="longUrl" placeholder="Enter long URL" size="50" />
+  <button onclick="shorten()">Shorten</button>
+  <p id="result"></p>
+
+  <script>
+    async function shorten() {
+      const url = document.getElementById("longUrl").value;
+      const res = await fetch("https://w7mp09thk1.execute-api.us-east-1.amazonaws.com/shorten", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: url })
+      });
+
+      const data = await res.json();
+      document.getElementById("result").innerHTML =
+        `Short URL: <a href="${data.short_url}" target="_blank">${data.short_url}</a>`;
+    }
+  </script>
+</body>
+</html>

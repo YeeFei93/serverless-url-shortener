@@ -48,6 +48,12 @@ resource "aws_lambda_function" "redirect_url" {
 resource "aws_apigatewayv2_api" "http_api" {
   name          = "url-shortener-api"
   protocol_type = "HTTP"
+
+  cors_configuration {
+    allow_origins = ["*"]
+    allow_methods = ["POST"]
+    allow_headers = ["content-type"]
+  }
 }
 
 resource "aws_apigatewayv2_integration" "shorten_integration" {
@@ -99,3 +105,83 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 }
+
+resource "aws_lambda_function" "options_lambda" {
+  filename         = "${path.module}/../lambda/options.zip"
+  function_name    = "options_handler"
+  role             = data.aws_iam_role.lambda_exec.arn
+  handler          = "options.lambda_handler"
+  runtime          = "python3.9"
+  source_code_hash = filebase64sha256("${path.module}/../lambda/options.zip")
+}
+
+resource "aws_apigatewayv2_integration" "options_integration" {
+  api_id                  = aws_apigatewayv2_api.http_api.id
+  integration_type        = "AWS_PROXY"
+  integration_uri         = aws_lambda_function.options_lambda.invoke_arn
+  integration_method      = "POST"
+  payload_format_version  = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "options_route" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "OPTIONS /shorten"
+  target    = "integrations/${aws_apigatewayv2_integration.options_integration.id}"
+}
+
+resource "aws_lambda_permission" "allow_options" {
+  statement_id  = "AllowAPIGatewayInvokeOptions"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.options_lambda.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
+}
+
+resource "aws_cloudfront_distribution" "frontend" {
+  origin {
+    domain_name = "yee-fei-url-shortener-frontend.s3-website-us-east-1.amazonaws.com"
+    origin_id   = "S3-Frontend"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1", "TLSv1.1", "TLSv1.2"]
+    }
+  }
+
+  enabled             = true
+  default_root_object = "index.html"
+
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-Frontend"
+
+    viewer_protocol_policy = "redirect-to-https"
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+  }
+
+  price_class = "PriceClass_100" # Cheapest (US, Canada, Europe)
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  tags = {
+    Name = "URL Shortener Frontend"
+  }
+}
+
