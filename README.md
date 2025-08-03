@@ -29,6 +29,8 @@ This is a fully serverless URL shortener built using **AWS Lambda**, **API Gatew
 - API endpoints active at `https://short.sctp-sandbox.com`
 - All components integrated and working together
 
+> **Note**: This project runs on a student AWS account where resources are cleaned up daily. Run `terraform apply` to redeploy if needed.
+
 ---
 
 ## Architecture Diagram
