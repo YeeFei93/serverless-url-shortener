@@ -8,3 +8,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_exec" {
   role       = data.aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
+
+# X-Ray tracing permissions for Lambda
+resource "aws_iam_role_policy_attachment" "lambda_xray_policy" {
+  role       = data.aws_iam_role.lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}

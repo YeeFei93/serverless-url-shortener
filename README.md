@@ -6,6 +6,7 @@ This is a fully serverless URL shortener built using **AWS Lambda**, **API Gatew
 
 ## Features
 
+### Core Functionality
 - **Static web UI** hosted on S3 + CloudFront (`https://ui.sctp-sandbox.com`)
 - **Short links** powered by API Gateway + Lambda (`https://short.sctp-sandbox.com`)
 - **Auto-generated 8-character short codes** using UUID
@@ -16,18 +17,47 @@ This is a fully serverless URL shortener built using **AWS Lambda**, **API Gatew
 - **DNS routing** - Amazon Route 53 for domain management
 - **Secure HTTPS** - TLS 1.2 enforced across all endpoints
 
+### 🆕 Enhanced Monitoring & Analytics
+- **CloudWatch Dashboards** - Real-time metrics for Lambda, API Gateway, and DynamoDB
+- **CloudWatch Alarms** - Automated alerts for errors, high traffic, and performance issues
+- **X-Ray Distributed Tracing** - End-to-end request tracing across all services
+- **Kinesis Data Firehose** - Stream click analytics to S3 for long-term analysis
+- **S3 Analytics Storage** - Organized data storage with compression and partitioning
+
+### 🆕 Security & Protection
+- **AWS WAF (Web Application Firewall)** - Rate limiting and attack protection
+- **CloudFront Security** - DDoS protection and geographic restrictions
+- **IAM Least Privilege** - Minimal required permissions for all services
+- **VPC Security** - Network isolation where applicable
+
+### 🆕 Operational Excellence  
+- **SNS Notifications** - Alert system for operational issues
+- **Automated Log Management** - Centralized logging with retention policies
+- **Cost Optimization** - Free tier usage with efficient resource sizing
+- **High Availability** - Multi-AZ deployment patterns
+
 ---
 
 ## Deployment Status
 
-**FULLY DEPLOYED AND OPERATIONAL**
+🟡 **DEPLOYED WITH DAILY MAINTENANCE REQUIRED**
 
-- Infrastructure provisioned via Terraform
-- Lambda functions deployed and tested  
-- Custom domains configured with SSL certificates
-- Frontend UI accessible at `https://ui.sctp-sandbox.com`
-- API endpoints active at `https://short.sctp-sandbox.com`
-- All components integrated and working together
+- ✅ Infrastructure provisioned via Terraform
+- ✅ Lambda functions deployed and tested  
+- ✅ Custom domains configured with SSL certificates
+- ✅ API endpoints active at `https://short.sctp-sandbox.com`
+- ⚠️ **Student AWS Account Note**: Resources are automatically destroyed daily and require redeployment
+
+### Daily Redeployment Required
+
+**Important**: This project is deployed on a student AWS account where certain resources (primarily S3 buckets) are automatically destroyed each day for cost management. To restore full functionality:
+
+```bash
+cd terraform
+terraform apply
+```
+
+This will recreate the destroyed resources. Most persistent resources (Lambda functions, API Gateway, DynamoDB, Route 53 records) typically remain intact, but the S3 bucket and CloudFront distribution may need to be recreated daily.
 
 ---
 
@@ -114,6 +144,7 @@ serverless-url-shortener/
 - AWS CLI configured with appropriate permissions
 - Terraform installed (v1.0+)
 - Access to a Route 53 hosted zone for `sctp-sandbox.com`
+- **Note**: Student AWS accounts have daily resource cleanup - see Deployment Status section
 
 ### 1. Clone the Repository
 
@@ -152,7 +183,7 @@ terraform apply
 
 The organized file structure makes it easy to understand and troubleshoot each deployment phase.
 
-**Note:** The infrastructure is already deployed. SSL certificates are automatically provisioned and validated via Route 53.
+**Note**: The infrastructure deployment is automated and reproducible. Due to student AWS account limitations with daily resource cleanup, you may need to run `terraform apply` daily to restore any destroyed resources (primarily S3 buckets).
 
 ### 4. Frontend Deployment (Automated)
 
