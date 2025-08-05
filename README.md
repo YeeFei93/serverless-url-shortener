@@ -1,33 +1,41 @@
 # Serverless URL Shortener on AWS
 
-This is a fully serverless URL shortener built using **AWS Lambda**, **API Gateway**, **DynamoDB**, **S3**, **CloudFront**, and **Terraform**. It allows users to shorten - ✅ **Infrastructure as Code** - provisioned via **Terraform** with organized structureny URL and receive a redirectable short link via a clean web interface.
+A serverless URL shortener built using AWS Lambda, API Gateway, DynamoDB, S3, CloudFront, and Terraform. Provides URL shortening functionality with a web interface.
 
 ---
 
 ## Features
 
-- **Static web UI** hosted on S3 + CloudFront (`https://ui.sctp-sandbox.com`)
-- **Short links** powered by API Gateway + Lambda (`https://short.sctp-sandbox.com`)
-- **Auto-generated 8-character short codes** using UUID
-- **Fully serverless and scalable** architecture
-- **Infrastructure as Code** - provisioned entirely using Terraform
-- **CORS support** - dedicated OPTIONS Lambda for frontend API calls
-- **Custom domains** - SSL certificates via AWS Certificate Manager (ACM)
-- **DNS routing** - Amazon Route 53 for domain management
-- **Secure HTTPS** - TLS 1.2 enforced across all endpoints
+### Core Functionality
+- Static web UI hosted on S3 + CloudFront (`https://ui.sctp-sandbox.com`)
+- Short links powered by API Gateway + Lambda (`https://short.sctp-sandbox.com`)
+- Auto-generated 8-character short codes using UUID
+- Serverless and scalable architecture
+- Infrastructure as Code provisioning with Terraform
+- CORS support with dedicated OPTIONS Lambda
+- Custom domains with SSL certificates via AWS Certificate Manager
+- DNS routing via Amazon Route 53
+- HTTPS enforcement with TLS 1.2
+
+### Security & Monitoring
+- AWS WAF protection with rate limiting and managed rules
+- CloudWatch monitoring with dashboards and alarms
+- X-Ray distributed tracing enabled on all Lambda functions
+- IAM least privilege access policies
+- Centralized logging with retention policies
+- Security groups for network-level controls
 
 ---
 
 ## Deployment Status
 
-**FULLY DEPLOYED AND OPERATIONAL**
+**DEPLOYED**
 
 - Infrastructure provisioned via Terraform
 - Lambda functions deployed and tested  
 - Custom domains configured with SSL certificates
 - Frontend UI accessible at `https://ui.sctp-sandbox.com`
 - API endpoints active at `https://short.sctp-sandbox.com`
-- All components integrated and working together
 
 > **Note**: This project runs on a student AWS account where resources are cleaned up daily. Run `terraform apply` to redeploy if needed.
 
@@ -92,7 +100,9 @@ serverless-url-shortener/
 │   ├── lambda.tf         # Lambda functions
 │   ├── api-gateway.tf    # API Gateway, routes, and integrations
 │   ├── frontend.tf       # S3 bucket and CloudFront
-│   └── dns.tf            # Route 53 records and SSL certificates
+│   ├── dns.tf            # Route 53 records and SSL certificates
+│   ├── monitoring.tf     # CloudWatch dashboards, alarms, and logging
+│   └── security.tf       # WAF, security groups, and enhanced IAM
 ├── frontend/
 │   └── index.html        # HTML + JS UI (calls short.sctp-sandbox.com)
 ├── build.sh              # Script to build Lambda deployment packages
@@ -107,6 +117,8 @@ serverless-url-shortener/
 - **`api-gateway.tf`** - API Gateway, integrations, routes, and permissions
 - **`frontend.tf`** - S3 bucket configuration and CloudFront distribution
 - **`dns.tf`** - SSL certificates, DNS validation, and Route 53 records
+- **`monitoring.tf`** - CloudWatch dashboards, alarms, and logging
+- **`security.tf`** - WAF, security groups, and enhanced IAM
 
 ---
 
@@ -151,6 +163,8 @@ terraform apply
 - **`api-gateway.tf`** sets up HTTP API with routes and integrations
 - **`dns.tf`** provisions SSL certificates and configures DNS records
 - **`frontend.tf`** creates S3 bucket, uploads files, and sets up CloudFront
+- **`monitoring.tf`** deploys CloudWatch dashboards, alarms, and log groups
+- **`security.tf`** configures WAF protection and enhanced security policies
 
 The organized file structure makes it easy to understand and troubleshoot each deployment phase.
 
@@ -200,16 +214,16 @@ Location: https://www.example.com
 
 ## Deployment Highlights
 
-- **Custom domain names:**
+- Custom domain names:
   - API: `https://short.sctp-sandbox.com`  
   - Frontend: `https://ui.sctp-sandbox.com`
-- **SSL certificates** issued and validated via **AWS Certificate Manager (ACM)**
-- **DNS routing** configured using **Amazon Route 53**
-- **Infrastructure as Code** - provisioned via **Terraform** with enterprise organization
-- **Automated deployment** - single `terraform apply` deploys entire stack
-- **Separate certificates** - dedicated SSL certs for each domain for security
-- **Modular Terraform structure** - service-based files for maintainability and team collaboration
-- **Production-ready practices** - consistent naming, tagging, and dependency management
+- SSL certificates issued and validated via AWS Certificate Manager
+- DNS routing configured using Amazon Route 53
+- Infrastructure as Code provisioned via Terraform
+- Single `terraform apply` deploys entire stack
+- Separate certificates for each domain
+- Modular Terraform structure organized by service
+- Consistent naming, tagging, and dependency management
 
 ---
 
@@ -227,20 +241,25 @@ Location: https://www.example.com
 ## Implementation Status & Future Improvements
 
 ### Completed Features
-- [x] **Basic URL shortening** - Core functionality implemented
-- [x] **Custom domains** - Both frontend and API have custom domains
-- [x] **SSL/TLS security** - HTTPS enforced with proper certificates
-- [x] **CORS support** - Frontend can call API from different domain
-- [x] **Infrastructure automation** - Complete Terraform deployment
-- [x] **Static web UI** - Clean, functional frontend interface
-- [x] **Organized Terraform structure** - Service-based file organization for maintainability
+- [x] Basic URL shortening functionality
+- [x] Custom domains for both frontend and API
+- [x] SSL/TLS security with HTTPS enforcement
+- [x] CORS support for cross-domain API calls
+- [x] Complete Terraform infrastructure automation
+- [x] Static web UI with clean interface
+- [x] Modular Terraform structure organized by service
+- [x] CloudWatch monitoring with dashboards and alarms
+- [x] X-Ray distributed tracing enabled on all Lambda functions
+- [x] AWS WAF protection with rate limiting and managed rules
+- [x] IAM least privilege access policies
+- [x] Centralized logging with retention policies
 
 ### Future Enhancements
-- [ ] **Custom analytics** (click count tracking)
-- [ ] **Link expiration** support with TTL
-- [ ] **Admin dashboard** for URL management and analytics
-- [ ] **Vanity URLs** (custom short codes)
-- [ ] **Short ID collision detection** and retry logic
-- [ ] **Rate limiting** to prevent abuse
-- [ ] **Bulk URL shortening** via CSV upload
-- [ ] **QR code generation** for shortened URLs
+- [ ] Custom analytics (click count tracking)
+- [ ] Link expiration support with TTL
+- [ ] Admin dashboard for URL management and analytics
+- [ ] Vanity URLs (custom short codes)
+- [ ] Short ID collision detection and retry logic
+- [ ] Rate limiting to prevent abuse
+- [ ] Bulk URL shortening via CSV upload
+- [ ] QR code generation for shortened URLs

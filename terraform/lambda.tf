@@ -7,6 +7,10 @@ resource "aws_lambda_function" "shorten_url" {
   runtime          = "python3.9"
   source_code_hash = filebase64sha256("${path.module}/../lambda/shorten.zip")
 
+  tracing_config {
+    mode = "Active"
+  }
+
   tags = {
     Name = "URL Shortener - Shorten Function"
   }
@@ -20,6 +24,10 @@ resource "aws_lambda_function" "redirect_url" {
   runtime          = "python3.9"
   source_code_hash = filebase64sha256("${path.module}/../lambda/redirect.zip")
 
+  tracing_config {
+    mode = "Active"
+  }
+
   tags = {
     Name = "URL Shortener - Redirect Function"
   }
@@ -32,6 +40,10 @@ resource "aws_lambda_function" "options_lambda" {
   handler          = "options.lambda_handler"
   runtime          = "python3.9"
   source_code_hash = filebase64sha256("${path.module}/../lambda/options.zip")
+
+  tracing_config {
+    mode = "Active"
+  }
 
   tags = {
     Name = "URL Shortener - CORS Options Function"
