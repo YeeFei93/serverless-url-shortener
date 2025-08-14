@@ -37,7 +37,11 @@ A serverless URL shortener built using AWS Lambda, API Gateway, DynamoDB, S3, Cl
 - Frontend UI accessible at `https://ui.sctp-sandbox.com`
 - API endpoints active at `https://short.sctp-sandbox.com`
 
-> **Note**: This project runs on a student AWS account where resources are cleaned up daily. Run `terraform apply` to redeploy if needed.
+> **Note**: This project runs on a student AWS account where resources are cleaned up daily. 
+> 
+> **🚀 Auto-Deployment Available**: GitHub Actions workflow automatically redeploys resources daily at 8:00 AM UTC. See [GITHUB_ACTIONS_SETUP.md](GITHUB_ACTIONS_SETUP.md) for setup instructions.
+>
+> **Manual deployment**: Run `terraform apply` to redeploy if needed.
 
 ---
 
@@ -121,6 +125,29 @@ serverless-url-shortener/
 - **`security.tf`** - WAF, security groups, and enhanced IAM
 
 ---
+
+## Automated Deployment
+
+### GitHub Actions (Recommended)
+
+Set up automated daily deployment using GitHub Actions:
+
+1. **Quick Setup**: Run the setup script
+   ```bash
+   chmod +x setup-aws-for-github-actions.sh
+   ./setup-aws-for-github-actions.sh
+   ```
+
+2. **Manual Setup**: Follow the detailed guide in [GITHUB_ACTIONS_SETUP.md](GITHUB_ACTIONS_SETUP.md)
+
+**Features:**
+- Daily automatic deployment at 8:00 AM UTC
+- Manual trigger with optional resource cleanup
+- Health checks and deployment status notifications  
+- Support for both OIDC and AWS access key authentication
+- Terraform remote state management
+
+### Manual Deployment
 
 ## Deployment Guide
 
