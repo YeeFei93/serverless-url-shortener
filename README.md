@@ -39,7 +39,7 @@ A serverless URL shortener built using AWS Lambda, API Gateway, DynamoDB, S3, Cl
 
 > **Note**: This project runs on a student AWS account where resources are cleaned up daily. 
 > 
-> **🚀 Auto-Deployment Available**: GitHub Actions workflow automatically redeploys resources daily at 8:00 AM UTC. See [GITHUB_ACTIONS_SETUP.md](GITHUB_ACTIONS_SETUP.md) for setup instructions.
+> **🚀 Auto-Deployment**: GitHub Actions workflow automatically redeploys resources daily at 8:00 AM Singapore Time (SGT).
 >
 > **Manual deployment**: Run `terraform apply` to redeploy if needed.
 
@@ -141,10 +141,10 @@ Set up automated daily deployment using GitHub Actions:
 2. **Manual Setup**: Follow the detailed guide in [GITHUB_ACTIONS_SETUP.md](GITHUB_ACTIONS_SETUP.md)
 
 **Features:**
-- Daily automatic deployment at 8:00 AM UTC
+- Daily automatic deployment at 8:00 AM Singapore Time (SGT)
 - Manual trigger with optional resource cleanup
 - Health checks and deployment status notifications  
-- Support for both OIDC and AWS access key authentication
+- AWS access key authentication
 - Terraform remote state management
 
 ### Manual Deployment
