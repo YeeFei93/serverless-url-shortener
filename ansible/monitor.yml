@@ -1,0 +1,124 @@
+---
+# Ansible playbook for infrastructure monitoring and maintenance
+- name: Monitor and Maintain Serverless URL Shortener
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    aws_region: "{{ aws_region | default('us-east-1') }}"
+    project_name: "serverless-url-shortener"
+    
+  tasks:
+    - name: Get AWS account information
+      command: aws sts get-caller-identity
+      register: aws_identity
+      changed_when: false
+      
+    - name: Check Lambda function status
+      command: >
+        aws lambda get-function
+        --function-name {{ item }}
+        --region {{ aws_region }}
+      register: lambda_status
+      loop:
+        - "url-shortener-shorten"
+        - "url-shortener-redirect" 
+        - "url-shortener-options"
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Display Lambda function health
+      debug:
+        msg: |
+          Function: {{ item.item }}
+          State: {{ (item.stdout | from_json).Configuration.State if item.rc == 0 else 'NOT FOUND' }}
+          Last Modified: {{ (item.stdout | from_json).Configuration.LastModified if item.rc == 0 else 'N/A' }}
+      loop: "{{ lambda_status.results }}"
+      
+    - name: Check DynamoDB table status
+      command: >
+        aws dynamodb describe-table
+        --table-name UrlTable
+        --region {{ aws_region }}
+      register: dynamodb_status
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Display DynamoDB table health
+      debug:
+        msg: |
+          DynamoDB Table Status: {{ (dynamodb_status.stdout | from_json).Table.TableStatus if dynamodb_status.rc == 0 else 'NOT FOUND' }}
+          Item Count: {{ (dynamodb_status.stdout | from_json).Table.ItemCount if dynamodb_status.rc == 0 else 'N/A' }}
+      
+    - name: Check API Gateway status
+      command: >
+        aws apigatewayv2 get-apis
+        --region {{ aws_region }}
+      register: api_status
+      changed_when: false
+      
+    - name: Get CloudWatch alarms
+      command: >
+        aws cloudwatch describe-alarms
+        --alarm-name-prefix "url-shortener"
+        --region {{ aws_region }}
+      register: cloudwatch_alarms
+      changed_when: false
+      
+    - name: Display alarm status
+      debug:
+        msg: |
+          Alarm: {{ item.AlarmName }}
+          State: {{ item.StateValue }}
+          Reason: {{ item.StateReason }}
+      loop: "{{ (cloudwatch_alarms.stdout | from_json).MetricAlarms }}"
+      
+    - name: Check recent CloudWatch logs
+      command: >
+        aws logs describe-log-groups
+        --log-group-name-prefix "/aws/lambda/url-shortener"
+        --region {{ aws_region }}
+      register: log_groups
+      changed_when: false
+      
+    - name: Display log group information
+      debug:
+        msg: |
+          Log Group: {{ item.logGroupName }}
+          Size: {{ item.storedBytes }} bytes
+          Retention: {{ item.retentionInDays | default('Never expires') }} days
+      loop: "{{ (log_groups.stdout | from_json).logGroups }}"
+      
+    - name: Generate monitoring report
+      copy:
+        content: |
+          # Serverless URL Shortener - Monitoring Report
+          Generated: {{ ansible_date_time.iso8601 }}
+          AWS Account: {{ (aws_identity.stdout | from_json).Account }}
+          Region: {{ aws_region }}
+          
+          ## Lambda Functions Status
+          {% for result in lambda_status.results %}
+          - {{ result.item }}: {{ (result.stdout | from_json).Configuration.State if result.rc == 0 else 'NOT FOUND' }}
+          {% endfor %}
+          
+          ## DynamoDB Status  
+          - UrlTable: {{ (dynamodb_status.stdout | from_json).Table.TableStatus if dynamodb_status.rc == 0 else 'NOT FOUND' }}
+          
+          ## CloudWatch Alarms
+          {% for alarm in (cloudwatch_alarms.stdout | from_json).MetricAlarms %}
+          - {{ alarm.AlarmName }}: {{ alarm.StateValue }}
+          {% endfor %}
+          
+          ## Recommendations
+          {% if lambda_status.results | selectattr('rc', 'ne', 0) | list | length > 0 %}
+          ⚠️ Some Lambda functions are missing - consider redeployment
+          {% endif %}
+          {% if dynamodb_status.rc != 0 %}
+          ⚠️ DynamoDB table not found - check deployment status
+          {% endif %}
+          
+        dest: "{{ playbook_dir }}/../monitoring-report-{{ ansible_date_time.epoch }}.md"
+        
+    - name: Display report location
+      debug:
+        msg: "Monitoring report saved to: monitoring-report-{{ ansible_date_time.epoch }}.md"

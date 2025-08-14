@@ -1,0 +1,8 @@
+# Use the official AWS Lambda Python runtime
+FROM public.ecr.aws/lambda/python:3.9
+
+# Copy function code
+COPY shorten.py ${LAMBDA_TASK_ROOT}
+
+# Set the CMD to your handler
+CMD [ "shorten.lambda_handler" ]
