@@ -48,6 +48,136 @@ jobs:
       working-directory: terraform
       run: terraform init
 
+    - name: Clean up existing conflicting resources
+      run: |
+        echo "🧹 Cleaning up existing AWS resources that might conflict..."
+        
+        # Get AWS Account ID
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        
+        # 1. Clean up S3 bucket and its contents
+        echo "Cleaning up S3 bucket..."
+        if aws s3 ls s3://yee-fei-url-shortener-frontend 2>/dev/null; then
+          echo "Found existing S3 bucket, emptying and deleting..."
+          aws s3 rm s3://yee-fei-url-shortener-frontend --recursive || true
+          aws s3 rb s3://yee-fei-url-shortener-frontend --force || true
+          echo "✅ S3 bucket cleaned up"
+        else
+          echo "✅ No existing S3 bucket found"
+        fi
+        
+        # 2. Clean up IAM policy
+        echo "Cleaning up IAM policy..."
+        POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/url-shortener-lambda-enhanced"
+        if aws iam get-policy --policy-arn "$POLICY_ARN" 2>/dev/null; then
+          echo "Found existing IAM policy, detaching and deleting..."
+          # Detach from any roles/users/groups
+          aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyRoles[].RoleName' --output text | xargs -r -I {} aws iam detach-role-policy --role-name {} --policy-arn "$POLICY_ARN" || true
+          aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyUsers[].UserName' --output text | xargs -r -I {} aws iam detach-user-policy --user-name {} --policy-arn "$POLICY_ARN" || true
+          aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyGroups[].GroupName' --output text | xargs -r -I {} aws iam detach-group-policy --group-name {} --policy-arn "$POLICY_ARN" || true
+          # Delete the policy
+          aws iam delete-policy --policy-arn "$POLICY_ARN" || true
+          echo "✅ IAM policy cleaned up"
+        else
+          echo "✅ No existing IAM policy found"
+        fi
+        
+        # 3. Clean up CloudFront distribution
+        echo "Cleaning up CloudFront distribution..."
+        CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'ui.sctp-sandbox.com')].Id | [0]" --output text 2>/dev/null || echo "None")
+        if [ "$CF_ID" != "None" ] && [ -n "$CF_ID" ]; then
+          echo "Found existing CloudFront distribution: $CF_ID"
+          # Check if it's already disabled
+          ENABLED=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.DistributionConfig.Enabled' --output text 2>/dev/null || echo "false")
+          if [ "$ENABLED" = "true" ]; then
+            echo "Disabling CloudFront distribution..."
+            # Get current config
+            aws cloudfront get-distribution-config --id "$CF_ID" > /tmp/cf-config.json
+            ETAG=$(jq -r '.ETag' /tmp/cf-config.json)
+            # Disable the distribution
+            jq '.DistributionConfig.Enabled = false' /tmp/cf-config.json > /tmp/cf-config-disabled.json
+            aws cloudfront update-distribution --id "$CF_ID" --distribution-config file:///tmp/cf-config-disabled.json --if-match "$ETAG" || true
+            echo "⏳ CloudFront distribution is being disabled (will be deleted later)..."
+          else
+            echo "CloudFront distribution is already disabled"
+          fi
+        else
+          echo "✅ No existing CloudFront distribution found"
+        fi
+        
+        # 4. Clean up API Gateway custom domain
+        echo "Cleaning up API Gateway custom domain..."
+        if aws apigatewayv2 get-domain-name --domain-name "short.sctp-sandbox.com" 2>/dev/null; then
+          echo "Found existing API Gateway custom domain, deleting..."
+          aws apigatewayv2 delete-domain-name --domain-name "short.sctp-sandbox.com" || true
+          echo "✅ API Gateway custom domain cleaned up"
+        else
+          echo "✅ No existing API Gateway custom domain found"
+        fi
+        
+        # 5. Clean up Route53 DNS validation records
+        echo "Cleaning up Route53 DNS validation records..."
+        ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
+        if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
+          # Delete CNAME records starting with underscore (validation records)
+          aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Type=='CNAME' && starts_with(Name, '_')]" --output json | jq -c '.[]' | while read -r record; do
+            RECORD_NAME=$(echo "$record" | jq -r '.Name')
+            RECORD_TYPE=$(echo "$record" | jq -r '.Type')
+            RECORD_TTL=$(echo "$record" | jq -r '.TTL')
+            RECORD_VALUE=$(echo "$record" | jq -r '.ResourceRecords[0].Value')
+            
+            echo "Deleting DNS validation record: $RECORD_NAME"
+            
+            # Create changeset JSON directly with jq
+            jq -n \
+              --arg name "$RECORD_NAME" \
+              --arg type "$RECORD_TYPE" \
+              --argjson ttl "$RECORD_TTL" \
+              --arg value "$RECORD_VALUE" \
+              '{
+                "Changes": [{
+                  "Action": "DELETE",
+                  "ResourceRecordSet": {
+                    "Name": $name,
+                    "Type": $type,
+                    "TTL": $ttl,
+                    "ResourceRecords": [{"Value": $value}]
+                  }
+                }]
+              }' > /tmp/delete-record.json
+            
+            aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/delete-record.json || true
+          done
+          echo "✅ DNS validation records cleaned up"
+        else
+          echo "✅ No hosted zone found or no records to clean"
+        fi
+        
+        # 6. Clean up ACM certificates
+        echo "Cleaning up ACM certificates..."
+        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+          CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
+          if [ "$CERT_ARN" != "None" ] && [ -n "$CERT_ARN" ]; then
+            echo "Found certificate for $domain, checking if it's in use..."
+            IN_USE=$(aws acm describe-certificate --region us-east-1 --certificate-arn "$CERT_ARN" --query 'Certificate.InUseBy' --output text 2>/dev/null || echo "[]")
+            if [ "$IN_USE" = "[]" ] || [ "$IN_USE" = "None" ]; then
+              echo "Certificate not in use, deleting..."
+              aws acm delete-certificate --region us-east-1 --certificate-arn "$CERT_ARN" || true
+              echo "✅ Certificate for $domain deleted"
+            else
+              echo "⚠️ Certificate for $domain is in use, skipping deletion"
+            fi
+          else
+            echo "✅ No certificate found for $domain"
+          fi
+        done
+        
+        # Wait a bit for AWS eventual consistency
+        echo "⏳ Waiting 30 seconds for AWS eventual consistency..."
+        sleep 30
+        
+        echo "✅ Resource cleanup completed!"
+
     - name: Terraform Plan
       working-directory: terraform
       run: terraform plan -out=tfplan

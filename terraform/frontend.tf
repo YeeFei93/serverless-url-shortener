@@ -52,7 +52,7 @@ resource "aws_s3_object" "index" {
 # CloudFront distribution
 resource "aws_cloudfront_distribution" "frontend" {
   origin {
-    domain_name = "yee-fei-url-shortener-frontend.s3-website-us-east-1.amazonaws.com"
+    domain_name = "yee-fei-url-shortener-frontend.s3-website-${var.aws_region}.amazonaws.com"
     origin_id   = "S3-Frontend"
 
     custom_origin_config {
