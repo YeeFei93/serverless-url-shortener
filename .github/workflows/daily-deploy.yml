@@ -115,40 +115,45 @@ jobs:
           echo "✅ No existing API Gateway custom domain found"
         fi
         
-        # 5. Clean up Route53 DNS validation records
-        echo "Cleaning up Route53 DNS validation records..."
+        # 5. Clean up Route53 DNS validation records (only for our specific domains)
+        echo "Cleaning up Route53 DNS validation records for our domains..."
         ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
         if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
-          # Delete CNAME records starting with underscore (validation records)
-          aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Type=='CNAME' && starts_with(Name, '_')]" --output json | jq -c '.[]' | while read -r record; do
-            RECORD_NAME=$(echo "$record" | jq -r '.Name')
-            RECORD_TYPE=$(echo "$record" | jq -r '.Type')
-            RECORD_TTL=$(echo "$record" | jq -r '.TTL')
-            RECORD_VALUE=$(echo "$record" | jq -r '.ResourceRecords[0].Value')
+          # Only delete validation records for our specific domains
+          for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+            echo "Looking for validation records for $domain..."
             
-            echo "Deleting DNS validation record: $RECORD_NAME"
-            
-            # Create changeset JSON directly with jq
-            jq -n \
-              --arg name "$RECORD_NAME" \
-              --arg type "$RECORD_TYPE" \
-              --argjson ttl "$RECORD_TTL" \
-              --arg value "$RECORD_VALUE" \
-              '{
-                "Changes": [{
-                  "Action": "DELETE",
-                  "ResourceRecordSet": {
-                    "Name": $name,
-                    "Type": $type,
-                    "TTL": $ttl,
-                    "ResourceRecords": [{"Value": $value}]
-                  }
-                }]
-              }' > /tmp/delete-record.json
-            
-            aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/delete-record.json || true
+            # Find validation CNAME records that end with our domain
+            aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Type=='CNAME' && starts_with(Name, '_') && ends_with(Name, '.$domain.')]" --output json | jq -c '.[]' | while read -r record; do
+              RECORD_NAME=$(echo "$record" | jq -r '.Name')
+              RECORD_TYPE=$(echo "$record" | jq -r '.Type')
+              RECORD_TTL=$(echo "$record" | jq -r '.TTL')
+              RECORD_VALUE=$(echo "$record" | jq -r '.ResourceRecords[0].Value')
+              
+              echo "Deleting validation record for $domain: $RECORD_NAME"
+              
+              # Create changeset JSON directly with jq
+              jq -n \
+                --arg name "$RECORD_NAME" \
+                --arg type "$RECORD_TYPE" \
+                --argjson ttl "$RECORD_TTL" \
+                --arg value "$RECORD_VALUE" \
+                '{
+                  "Changes": [{
+                    "Action": "DELETE",
+                    "ResourceRecordSet": {
+                      "Name": $name,
+                      "Type": $type,
+                      "TTL": $ttl,
+                      "ResourceRecords": [{"Value": $value}]
+                    }
+                  }]
+                }' > /tmp/delete-record.json
+              
+              aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/delete-record.json || true
+            done
           done
-          echo "✅ DNS validation records cleaned up"
+          echo "✅ DNS validation records for our domains cleaned up"
         else
           echo "✅ No hosted zone found or no records to clean"
         fi
