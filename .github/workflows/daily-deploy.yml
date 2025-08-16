@@ -253,7 +253,59 @@ jobs:
           fi
         done
         
-        # 8. Clean up ACM certificates
+        # 8. Clean up existing Lambda functions
+        echo "Cleaning up existing Lambda functions..."
+        for function_name in "shorten_url" "redirect_url" "options_handler"; do
+          echo "Checking for existing Lambda function: $function_name"
+          
+          if aws lambda get-function --function-name "$function_name" 2>/dev/null; then
+            echo "Found existing Lambda function $function_name, deleting..."
+            aws lambda delete-function --function-name "$function_name" || true
+            echo "✅ Lambda function $function_name deleted"
+          else
+            echo "✅ No existing Lambda function found: $function_name"
+          fi
+        done
+        
+        # 9. Clean up existing DynamoDB table
+        echo "Cleaning up existing DynamoDB table..."
+        TABLE_NAME="UrlTable"
+        if aws dynamodb describe-table --table-name "$TABLE_NAME" 2>/dev/null; then
+          echo "Found existing DynamoDB table $TABLE_NAME, deleting..."
+          aws dynamodb delete-table --table-name "$TABLE_NAME" || true
+          echo "⏳ Waiting for DynamoDB table deletion..."
+          aws dynamodb wait table-not-exists --table-name "$TABLE_NAME" || true
+          echo "✅ DynamoDB table $TABLE_NAME deleted"
+        else
+          echo "✅ No existing DynamoDB table found: $TABLE_NAME"
+        fi
+        
+        # 10. Clean up existing API Gateway
+        echo "Cleaning up existing API Gateway..."
+        API_NAME="url-shortener-api"
+        API_ID=$(aws apigatewayv2 get-apis --query "Items[?Name=='$API_NAME'].ApiId | [0]" --output text 2>/dev/null || echo "None")
+        if [ "$API_ID" != "None" ] && [ -n "$API_ID" ]; then
+          echo "Found existing API Gateway $API_NAME with ID: $API_ID, deleting..."
+          aws apigatewayv2 delete-api --api-id "$API_ID" || true
+          echo "✅ API Gateway $API_NAME deleted"
+        else
+          echo "✅ No existing API Gateway found: $API_NAME"
+        fi
+        
+        # 11. Clean up CloudWatch alarms
+        echo "Cleaning up CloudWatch alarms..."
+        for alarm_name in "url-shortener-lambda-errors" "url-shortener-api-errors" "url-shortener-dynamodb-errors" "url-shortener-dynamodb-throttles"; do
+          echo "Checking for alarm: $alarm_name"
+          if aws cloudwatch describe-alarms --alarm-names "$alarm_name" --query 'MetricAlarms[0]' --output text 2>/dev/null | grep -v "None"; then
+            echo "Found existing alarm $alarm_name, deleting..."
+            aws cloudwatch delete-alarms --alarm-names "$alarm_name" || true
+            echo "✅ CloudWatch alarm $alarm_name deleted"
+          else
+            echo "✅ No existing alarm found: $alarm_name"
+          fi
+        done
+        
+        # 12. Clean up ACM certificates
         echo "Cleaning up ACM certificates..."
         for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
