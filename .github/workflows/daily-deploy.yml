@@ -82,7 +82,7 @@ jobs:
           echo "✅ No existing IAM policy found"
         fi
         
-        # 3. Clean up CloudFront distributions
+        # 3. Clean up CloudFront distributions (enhanced with deletion)
         echo "Cleaning up CloudFront distributions..."
         
         # Check for distributions with our CNAMEs
@@ -106,8 +106,25 @@ jobs:
               jq '.DistributionConfig.Enabled = false' /tmp/cf-config-$CF_ID.json > /tmp/cf-config-disabled-$CF_ID.json
               aws cloudfront update-distribution --id "$CF_ID" --distribution-config file:///tmp/cf-config-disabled-$CF_ID.json --if-match "$ETAG" || true
               echo "⏳ CloudFront distribution $CF_ID is being disabled..."
+              
+              # Wait for distribution to be disabled
+              echo "Waiting for CloudFront distribution to be disabled..."
+              aws cloudfront wait distribution-deployed --id "$CF_ID" || true
+              
+              # Now try to delete it
+              echo "Attempting to delete CloudFront distribution $CF_ID..."
+              CURRENT_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" --query 'ETag' --output text 2>/dev/null || echo "")
+              if [ ! -z "$CURRENT_ETAG" ]; then
+                aws cloudfront delete-distribution --id "$CF_ID" --if-match "$CURRENT_ETAG" || true
+                echo "✅ CloudFront distribution $CF_ID deletion initiated"
+              fi
             else
-              echo "CloudFront distribution $CF_ID is already disabled"
+              echo "CloudFront distribution $CF_ID is already disabled, attempting deletion..."
+              CURRENT_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" --query 'ETag' --output text 2>/dev/null || echo "")
+              if [ ! -z "$CURRENT_ETAG" ]; then
+                aws cloudfront delete-distribution --id "$CF_ID" --if-match "$CURRENT_ETAG" || true
+                echo "✅ CloudFront distribution $CF_ID deletion initiated"
+              fi
             fi
           else
             echo "✅ No existing CloudFront distribution found for $domain"
@@ -305,7 +322,51 @@ jobs:
           fi
         done
         
-        # 12. Clean up ACM certificates
+        # 12. Clean up CloudWatch Log Groups
+        echo "Cleaning up CloudWatch Log Groups..."
+        for log_group in "/aws/lambda/url-shortener-shorten" "/aws/lambda/url-shortener-redirect" "/aws/lambda/url-shortener-options"; do
+          echo "Checking for log group: $log_group"
+          if aws logs describe-log-groups --log-group-name-prefix "$log_group" --query 'logGroups[?logGroupName==`'$log_group'`]' --output text 2>/dev/null | grep -q "$log_group"; then
+            echo "Found existing log group $log_group, deleting..."
+            aws logs delete-log-group --log-group-name "$log_group" || true
+            echo "✅ CloudWatch log group $log_group deleted"
+          else
+            echo "✅ No existing log group found: $log_group"
+          fi
+        done
+        
+        # 13. Clean up XRay Sampling Rule
+        echo "Cleaning up XRay Sampling Rule..."
+        SAMPLING_RULE_NAME="url-shortener-sampling"
+        if aws xray get-sampling-rules --query "SamplingRuleRecords[?SamplingRule.RuleName=='$SAMPLING_RULE_NAME']" --output text 2>/dev/null | grep -q "$SAMPLING_RULE_NAME"; then
+          echo "Found existing XRay sampling rule $SAMPLING_RULE_NAME, deleting..."
+          aws xray delete-sampling-rule --rule-name "$SAMPLING_RULE_NAME" || true
+          echo "✅ XRay sampling rule $SAMPLING_RULE_NAME deleted"
+        else
+          echo "✅ No existing XRay sampling rule found: $SAMPLING_RULE_NAME"
+        fi
+        
+        # 14. Clean up WAFv2 Web ACL
+        echo "Cleaning up WAFv2 Web ACL..."
+        WEB_ACL_NAME="url-shortener-api-protection"
+        WEB_ACL_ID=$(aws wafv2 list-web-acls --scope CLOUDFRONT --region us-east-1 --query "WebACLs[?Name=='$WEB_ACL_NAME'].Id | [0]" --output text 2>/dev/null || echo "None")
+        if [ "$WEB_ACL_ID" != "None" ] && [ -n "$WEB_ACL_ID" ]; then
+          echo "Found existing WAFv2 Web ACL $WEB_ACL_NAME with ID: $WEB_ACL_ID, deleting..."
+          
+          # First, get the lock token
+          LOCK_TOKEN=$(aws wafv2 get-web-acl --scope CLOUDFRONT --region us-east-1 --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" --query 'LockToken' --output text 2>/dev/null || echo "")
+          
+          if [ ! -z "$LOCK_TOKEN" ]; then
+            aws wafv2 delete-web-acl --scope CLOUDFRONT --region us-east-1 --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" --lock-token "$LOCK_TOKEN" || true
+            echo "✅ WAFv2 Web ACL $WEB_ACL_NAME deleted"
+          else
+            echo "⚠️ Could not get lock token for WAFv2 Web ACL $WEB_ACL_NAME"
+          fi
+        else
+          echo "✅ No existing WAFv2 Web ACL found: $WEB_ACL_NAME"
+        fi
+        
+        # 15. Clean up ACM certificates
         echo "Cleaning up ACM certificates..."
         for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
