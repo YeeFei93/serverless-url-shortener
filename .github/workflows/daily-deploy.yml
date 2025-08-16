@@ -82,28 +82,37 @@ jobs:
           echo "✅ No existing IAM policy found"
         fi
         
-        # 3. Clean up CloudFront distribution
-        echo "Cleaning up CloudFront distribution..."
-        CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'ui.sctp-sandbox.com')].Id | [0]" --output text 2>/dev/null || echo "None")
-        if [ "$CF_ID" != "None" ] && [ -n "$CF_ID" ]; then
-          echo "Found existing CloudFront distribution: $CF_ID"
-          # Check if it's already disabled
-          ENABLED=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.DistributionConfig.Enabled' --output text 2>/dev/null || echo "false")
-          if [ "$ENABLED" = "true" ]; then
-            echo "Disabling CloudFront distribution..."
-            # Get current config
-            aws cloudfront get-distribution-config --id "$CF_ID" > /tmp/cf-config.json
-            ETAG=$(jq -r '.ETag' /tmp/cf-config.json)
-            # Disable the distribution
-            jq '.DistributionConfig.Enabled = false' /tmp/cf-config.json > /tmp/cf-config-disabled.json
-            aws cloudfront update-distribution --id "$CF_ID" --distribution-config file:///tmp/cf-config-disabled.json --if-match "$ETAG" || true
-            echo "⏳ CloudFront distribution is being disabled (will be deleted later)..."
+        # 3. Clean up CloudFront distributions
+        echo "Cleaning up CloudFront distributions..."
+        
+        # Check for distributions with our CNAMEs
+        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+          echo "Looking for CloudFront distribution with CNAME: $domain"
+          
+          CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$domain')].Id | [0]" --output text 2>/dev/null || echo "None")
+          
+          if [ "$CF_ID" != "None" ] && [ -n "$CF_ID" ]; then
+            echo "Found existing CloudFront distribution for $domain: $CF_ID"
+            
+            # Check if it's already disabled
+            ENABLED=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.DistributionConfig.Enabled' --output text 2>/dev/null || echo "false")
+            
+            if [ "$ENABLED" = "true" ]; then
+              echo "Disabling CloudFront distribution $CF_ID..."
+              # Get current config
+              aws cloudfront get-distribution-config --id "$CF_ID" > /tmp/cf-config-$CF_ID.json
+              ETAG=$(jq -r '.ETag' /tmp/cf-config-$CF_ID.json)
+              # Disable the distribution
+              jq '.DistributionConfig.Enabled = false' /tmp/cf-config-$CF_ID.json > /tmp/cf-config-disabled-$CF_ID.json
+              aws cloudfront update-distribution --id "$CF_ID" --distribution-config file:///tmp/cf-config-disabled-$CF_ID.json --if-match "$ETAG" || true
+              echo "⏳ CloudFront distribution $CF_ID is being disabled..."
+            else
+              echo "CloudFront distribution $CF_ID is already disabled"
+            fi
           else
-            echo "CloudFront distribution is already disabled"
+            echo "✅ No existing CloudFront distribution found for $domain"
           fi
-        else
-          echo "✅ No existing CloudFront distribution found"
-        fi
+        done
         
         # 4. Clean up API Gateway custom domain
         echo "Cleaning up API Gateway custom domain..."
@@ -158,7 +167,93 @@ jobs:
           echo "✅ No hosted zone found or no records to clean"
         fi
         
-        # 6. Clean up ACM certificates
+        # 6. Clean up Route53 A records for our domains
+        echo "Cleaning up Route53 A records for our domains..."
+        ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
+        if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
+          for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+            echo "Looking for A record for $domain..."
+            
+            # Find A records for our specific domains
+            RECORD=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Type=='A' && Name=='$domain.']" --output json | jq -c '.[0]' 2>/dev/null)
+            
+            if [ "$RECORD" != "null" ] && [ "$RECORD" != "" ]; then
+              echo "Found A record for $domain, deleting..."
+              
+              # Check if it's an alias record or regular A record
+              if echo "$RECORD" | jq -e '.AliasTarget' > /dev/null; then
+                # It's an alias record
+                ALIAS_TARGET=$(echo "$RECORD" | jq -r '.AliasTarget.DNSName')
+                ALIAS_ZONE=$(echo "$RECORD" | jq -r '.AliasTarget.HostedZoneId')
+                EVALUATE_HEALTH=$(echo "$RECORD" | jq -r '.AliasTarget.EvaluateTargetHealth')
+                
+                jq -n \
+                  --arg name "$domain." \
+                  --arg alias_target "$ALIAS_TARGET" \
+                  --arg alias_zone "$ALIAS_ZONE" \
+                  --argjson evaluate_health "$EVALUATE_HEALTH" \
+                  '{
+                    "Changes": [{
+                      "Action": "DELETE",
+                      "ResourceRecordSet": {
+                        "Name": $name,
+                        "Type": "A",
+                        "AliasTarget": {
+                          "DNSName": $alias_target,
+                          "HostedZoneId": $alias_zone,
+                          "EvaluateTargetHealth": $evaluate_health
+                        }
+                      }
+                    }]
+                  }' > /tmp/delete-a-record.json
+              else
+                # It's a regular A record
+                RECORD_TTL=$(echo "$RECORD" | jq -r '.TTL')
+                RECORD_VALUES=$(echo "$RECORD" | jq -c '.ResourceRecords')
+                
+                jq -n \
+                  --arg name "$domain." \
+                  --argjson ttl "$RECORD_TTL" \
+                  --argjson values "$RECORD_VALUES" \
+                  '{
+                    "Changes": [{
+                      "Action": "DELETE",
+                      "ResourceRecordSet": {
+                        "Name": $name,
+                        "Type": "A",
+                        "TTL": $ttl,
+                        "ResourceRecords": $values
+                      }
+                    }]
+                  }' > /tmp/delete-a-record.json
+              fi
+              
+              aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/delete-a-record.json || true
+              echo "✅ A record for $domain deleted"
+            else
+              echo "✅ No A record found for $domain"
+            fi
+          done
+        fi
+        
+        # 7. Clean up CloudWatch query definitions
+        echo "Cleaning up CloudWatch query definitions..."
+        for query_name in "url-shortener-error-analysis" "url-shortener-performance-analysis"; do
+          echo "Checking for query definition: $query_name"
+          
+          # Get query definition
+          QUERY_DEF=$(aws logs describe-query-definitions --query-definition-name-prefix "$query_name" --query "queryDefinitions[?name=='$query_name']" --output json 2>/dev/null || echo "[]")
+          
+          if [ "$(echo "$QUERY_DEF" | jq length)" -gt 0 ]; then
+            echo "Found query definition $query_name, deleting..."
+            aws logs delete-query-definition --query-definition-id "$(echo "$QUERY_DEF" | jq -r '.[0].queryDefinitionId')" || true
+            echo "✅ Query definition $query_name deleted"
+          else
+            echo "✅ No query definition found for $query_name"
+          fi
+        done
+        
+        # 8. Clean up ACM certificates
         echo "Cleaning up ACM certificates..."
         for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
