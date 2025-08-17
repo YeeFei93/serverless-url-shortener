@@ -108,7 +108,89 @@ jobs:
         
         echo "🏁 Lambda functions cleanup completed"
         
-        # 4. Clean up CloudFront distributions (Enhanced with proper deletion)
+        # 4. Clean up DynamoDB table
+        echo "🔄 Cleaning up DynamoDB table..."
+        
+        TABLE_NAME="UrlTable"
+        if aws dynamodb describe-table --table-name "$TABLE_NAME" > /dev/null 2>&1; then
+          echo "Found existing DynamoDB table $TABLE_NAME, deleting..."
+          if aws dynamodb delete-table --table-name "$TABLE_NAME" 2>/dev/null; then
+            echo "✅ Successfully initiated deletion of DynamoDB table $TABLE_NAME"
+            # Wait a bit for deletion to start
+            sleep 10
+          else
+            echo "⚠️ Failed to delete DynamoDB table $TABLE_NAME"
+          fi
+        else
+          echo "✅ No existing DynamoDB table found: $TABLE_NAME"
+        fi
+        
+        # 5. Clean up CloudWatch Log Groups
+        echo "🔄 Cleaning up CloudWatch Log Groups..."
+        
+        LOG_GROUPS=("/aws/lambda/url-shortener-shorten" "/aws/lambda/url-shortener-redirect" "/aws/lambda/url-shortener-options")
+        
+        for LOG_GROUP in "${LOG_GROUPS[@]}"; do
+          echo "Checking CloudWatch Log Group: $LOG_GROUP"
+          
+          if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query "logGroups[?logGroupName=='$LOG_GROUP']" --output text | grep -q "$LOG_GROUP"; then
+            echo "Found existing log group $LOG_GROUP, deleting..."
+            if aws logs delete-log-group --log-group-name "$LOG_GROUP" 2>/dev/null; then
+              echo "✅ Successfully deleted log group $LOG_GROUP"
+            else
+              echo "⚠️ Failed to delete log group $LOG_GROUP"
+            fi
+          else
+            echo "✅ No existing log group found: $LOG_GROUP"
+          fi
+        done
+        
+        # 6. Clean up X-Ray sampling rule
+        echo "🔄 Cleaning up X-Ray sampling rule..."
+        
+        SAMPLING_RULE_NAME="url-shortener-sampling"
+        if aws xray get-sampling-rule --rule-name "$SAMPLING_RULE_NAME" > /dev/null 2>&1; then
+          echo "Found existing X-Ray sampling rule $SAMPLING_RULE_NAME, deleting..."
+          if aws xray delete-sampling-rule --rule-name "$SAMPLING_RULE_NAME" 2>/dev/null; then
+            echo "✅ Successfully deleted X-Ray sampling rule $SAMPLING_RULE_NAME"
+          else
+            echo "⚠️ Failed to delete X-Ray sampling rule $SAMPLING_RULE_NAME"
+          fi
+        else
+          echo "✅ No existing X-Ray sampling rule found: $SAMPLING_RULE_NAME"
+        fi
+        
+        # 7. Clean up WAF Web ACL
+        echo "🔄 Cleaning up WAF Web ACL..."
+        
+        WEB_ACL_NAME="url-shortener-api-protection"
+        WEB_ACL_SCOPE="REGIONAL"
+        
+        # Get Web ACL details if it exists
+        WEB_ACL_INFO=$(aws wafv2 list-web-acls --scope "$WEB_ACL_SCOPE" --query "WebACLs[?Name=='$WEB_ACL_NAME']" --output json 2>/dev/null || echo "[]")
+        
+        if [ "$(echo "$WEB_ACL_INFO" | jq length)" -gt 0 ]; then
+          WEB_ACL_ID=$(echo "$WEB_ACL_INFO" | jq -r '.[0].Id')
+          echo "Found existing WAF Web ACL $WEB_ACL_NAME with ID: $WEB_ACL_ID"
+          
+          # Get lock token for deletion
+          LOCK_TOKEN=$(aws wafv2 get-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --query 'LockToken' --output text 2>/dev/null || echo "")
+          
+          if [ -n "$LOCK_TOKEN" ]; then
+            echo "Attempting to delete WAF Web ACL..."
+            if aws wafv2 delete-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --lock-token "$LOCK_TOKEN" 2>/dev/null; then
+              echo "✅ Successfully deleted WAF Web ACL $WEB_ACL_NAME"
+            else
+              echo "⚠️ Failed to delete WAF Web ACL $WEB_ACL_NAME (may be associated with resources)"
+            fi
+          else
+            echo "⚠️ Could not get lock token for WAF Web ACL $WEB_ACL_NAME"
+          fi
+        else
+          echo "✅ No existing WAF Web ACL found: $WEB_ACL_NAME"
+        fi
+        
+        # 8. Clean up CloudFront distributions (Enhanced with proper deletion)
         echo "🔄 Starting CloudFront distributions cleanup..."
         
         # Function to wait for CloudFront distribution status
@@ -212,7 +294,7 @@ jobs:
         
         echo "🏁 CloudFront cleanup completed"
         
-        # 5. Clean up API Gateway custom domain
+        # 9. Clean up API Gateway custom domain
         echo "Cleaning up API Gateway custom domain..."
         if aws apigatewayv2 get-domain-name --domain-name "short.sctp-sandbox.com" 2>/dev/null; then
           echo "Found existing API Gateway custom domain, deleting..."
@@ -222,7 +304,7 @@ jobs:
           echo "✅ No existing API Gateway custom domain found"
         fi
         
-                # 6. Clean up Route53 DNS validation records (only for API domain)
+                # 10. Clean up Route53 DNS validation records (only for API domain)
         echo "Cleaning up Route53 DNS validation records for our domains..."
         ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
         if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
@@ -265,7 +347,7 @@ jobs:
           echo "✅ No hosted zone found or no records to clean"
         fi
         
-                # 7. Clean up Route53 A records (only for API domain)
+                # 11. Clean up Route53 A records (only for API domain)
         echo "Cleaning up Route53 A records for our domains..."
         ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
         if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
@@ -334,7 +416,7 @@ jobs:
           done
         fi
         
-        # 8. Clean up CloudWatch query definitions
+        # 12. Clean up CloudWatch query definitions
         echo "Cleaning up CloudWatch query definitions..."
         for query_name in "url-shortener-error-analysis" "url-shortener-performance-analysis"; do
           echo "Checking for query definition: $query_name"
@@ -351,7 +433,7 @@ jobs:
           fi
         done
         
-        # 9. Clean up ACM certificates (only API certificate)
+        # 13. Clean up ACM certificates (only API certificate)
         echo "Cleaning up ACM certificates..."
         for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
