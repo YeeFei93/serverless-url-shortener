@@ -82,63 +82,109 @@ jobs:
           echo "✅ No existing IAM policy found"
         fi
         
-        # 3. Clean up CloudFront distributions (comprehensive cleanup)
-        echo "Cleaning up CloudFront distributions..."
+        # 3. Clean up CloudFront distributions (Enhanced with proper deletion)
+        echo "🔄 Starting CloudFront distributions cleanup..."
         
-        # Get ALL distributions first to find any that might be using our domains
-        echo "Scanning all CloudFront distributions for CNAME conflicts..."
-        ALL_CF_IDS=$(aws cloudfront list-distributions --query "DistributionList.Items[].Id" --output text 2>/dev/null || echo "")
-        
-        if [ ! -z "$ALL_CF_IDS" ]; then
-          for CF_ID in $ALL_CF_IDS; do
-            # Check if this distribution uses any of our domains
-            ALIASES=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.DistributionConfig.Aliases.Items' --output json 2>/dev/null || echo "[]")
+        # Function to wait for CloudFront distribution status
+        wait_for_cloudfront_status() {
+          local cf_id=$1
+          local target_status=$2
+          local max_wait_minutes=$3
+          local wait_seconds=0
+          local max_wait_seconds=$((max_wait_minutes * 60))
+          
+          echo "⏳ Waiting for CloudFront distribution $cf_id to reach status: $target_status (max ${max_wait_minutes}min)"
+          
+          while [ $wait_seconds -lt $max_wait_seconds ]; do
+            local current_status=$(aws cloudfront get-distribution --id "$cf_id" --query 'Distribution.Status' --output text 2>/dev/null || echo "NotFound")
             
-            if echo "$ALIASES" | jq -r '.[]' | grep -E "(ui\.sctp-sandbox\.com|short\.sctp-sandbox\.com)" > /dev/null 2>&1; then
-              echo "Found CloudFront distribution $CF_ID using our domains"
+            if [ "$current_status" = "$target_status" ]; then
+              echo "✅ CloudFront distribution $cf_id is now $target_status"
+              return 0
+            elif [ "$current_status" = "NotFound" ]; then
+              echo "✅ CloudFront distribution $cf_id no longer exists"
+              return 0
+            fi
+            
+            echo "   Status: $current_status (waiting ${wait_seconds}s/${max_wait_seconds}s)"
+            sleep 30
+            wait_seconds=$((wait_seconds + 30))
+          done
+          
+          echo "⚠️ Timeout waiting for CloudFront distribution $cf_id to reach $target_status"
+          return 1
+        }
+        
+        # Check for distributions with our CNAMEs
+        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+          echo "🔍 Looking for CloudFront distribution with CNAME: $domain"
+          
+          CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$domain')].Id | [0]" --output text 2>/dev/null || echo "None")
+          
+          if [ "$CF_ID" != "None" ] && [ -n "$CF_ID" ]; then
+            echo "📍 Found existing CloudFront distribution for $domain: $CF_ID"
+            
+            # Get current distribution status and config
+            DISTRIBUTION_INFO=$(aws cloudfront get-distribution --id "$CF_ID" 2>/dev/null || echo "{}")
+            if [ "$DISTRIBUTION_INFO" = "{}" ]; then
+              echo "✅ Distribution $CF_ID no longer exists"
+              continue
+            fi
+            
+            ENABLED=$(echo "$DISTRIBUTION_INFO" | jq -r '.Distribution.DistributionConfig.Enabled')
+            STATUS=$(echo "$DISTRIBUTION_INFO" | jq -r '.Distribution.Status')
+            
+            echo "   Current status: $STATUS, Enabled: $ENABLED"
+            
+            # Step 1: Disable the distribution if it's enabled
+            if [ "$ENABLED" = "true" ]; then
+              echo "🔧 Disabling CloudFront distribution $CF_ID..."
               
-              # Check if it's already disabled
-              ENABLED=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.DistributionConfig.Enabled' --output text 2>/dev/null || echo "false")
+              # Get current config and ETag
+              aws cloudfront get-distribution-config --id "$CF_ID" > /tmp/cf-config-$CF_ID.json 2>/dev/null || continue
+              ETAG=$(jq -r '.ETag' /tmp/cf-config-$CF_ID.json)
               
-              if [ "$ENABLED" = "true" ]; then
-                echo "Disabling CloudFront distribution $CF_ID..."
-                # Get current config with ETag
-                CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CF_ID" 2>/dev/null || echo "")
-                if [ ! -z "$CF_CONFIG" ]; then
-                  ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
-                  echo "$CF_CONFIG" | jq '.DistributionConfig' > /tmp/cf-config-$CF_ID.json
-                  # Disable the distribution
-                  jq '.Enabled = false' /tmp/cf-config-$CF_ID.json > /tmp/cf-config-disabled-$CF_ID.json
-                  aws cloudfront update-distribution --id "$CF_ID" --distribution-config file:///tmp/cf-config-disabled-$CF_ID.json --if-match "$ETAG" || true
-                  echo "⏳ CloudFront distribution $CF_ID is being disabled..."
-                fi
-              fi
+              # Create disabled config (extract only DistributionConfig part)
+              jq '.DistributionConfig | .Enabled = false' /tmp/cf-config-$CF_ID.json > /tmp/cf-config-disabled-$CF_ID.json
               
-              # Wait for distribution to be fully disabled before attempting deletion
-              echo "Waiting for CloudFront distribution $CF_ID to be deployable..."
-              timeout 300 bash -c "
-                while true; do
-                  STATUS=\$(aws cloudfront get-distribution --id '$CF_ID' --query 'Distribution.Status' --output text 2>/dev/null || echo 'InProgress')
-                  if [ \"\$STATUS\" = \"Deployed\" ]; then
-                    break
-                  fi
-                  echo \"Distribution status: \$STATUS, waiting...\"
-                  sleep 10
-                done
-              " || echo "Timeout waiting for distribution to be deployed"
-              
-              # Now try to delete it
-              echo "Attempting to delete CloudFront distribution $CF_ID..."
-              CURRENT_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" --query 'ETag' --output text 2>/dev/null || echo "")
-              if [ ! -z "$CURRENT_ETAG" ]; then
-                aws cloudfront delete-distribution --id "$CF_ID" --if-match "$CURRENT_ETAG" || true
-                echo "✅ CloudFront distribution $CF_ID deletion initiated"
+              # Update the distribution
+              if aws cloudfront update-distribution --id "$CF_ID" --distribution-config file:///tmp/cf-config-disabled-$CF_ID.json --if-match "$ETAG" 2>/dev/null; then
+                echo "✅ Successfully initiated disable for distribution $CF_ID"
+              else
+                echo "⚠️ Failed to disable distribution $CF_ID, may already be in progress"
               fi
             fi
-          done
-        fi
+            
+            # Step 2: Wait for distribution to be deployed (disabled state)
+            if wait_for_cloudfront_status "$CF_ID" "Deployed" 15; then
+              echo "🗑️ Attempting to delete CloudFront distribution $CF_ID..."
+              
+              # Get fresh ETag for deletion
+              FRESH_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" --query 'ETag' --output text 2>/dev/null || echo "")
+              
+              if [ -n "$FRESH_ETAG" ]; then
+                if aws cloudfront delete-distribution --id "$CF_ID" --if-match "$FRESH_ETAG" 2>/dev/null; then
+                  echo "✅ Successfully initiated deletion of distribution $CF_ID"
+                else
+                  echo "⚠️ Failed to delete distribution $CF_ID - may still have dependencies or invalid ETag"
+                fi
+              else
+                echo "⚠️ Could not get fresh ETag for distribution $CF_ID"
+              fi
+            else
+              echo "⚠️ Distribution $CF_ID did not reach Deployed status within timeout"
+              echo "   This distribution may still cause CNAME conflicts"
+            fi
+            
+            # Cleanup temp files
+            rm -f /tmp/cf-config-$CF_ID.json /tmp/cf-config-disabled-$CF_ID.json
+            
+          else
+            echo "✅ No existing CloudFront distribution found for $domain"
+          fi
+        done
         
-        echo "✅ CloudFront distributions cleanup completed"
+        echo "🏁 CloudFront cleanup completed"
         
         # 4. Clean up API Gateway custom domain
         echo "Cleaning up API Gateway custom domain..."
@@ -279,118 +325,7 @@ jobs:
           fi
         done
         
-        # 8. Clean up existing Lambda functions
-        echo "Cleaning up existing Lambda functions..."
-        for function_name in "shorten_url" "redirect_url" "options_handler"; do
-          echo "Checking for existing Lambda function: $function_name"
-          
-          if aws lambda get-function --function-name "$function_name" 2>/dev/null; then
-            echo "Found existing Lambda function $function_name, deleting..."
-            aws lambda delete-function --function-name "$function_name" || true
-            echo "✅ Lambda function $function_name deleted"
-          else
-            echo "✅ No existing Lambda function found: $function_name"
-          fi
-        done
-        
-        # 9. Clean up existing DynamoDB table
-        echo "Cleaning up existing DynamoDB table..."
-        TABLE_NAME="UrlTable"
-        if aws dynamodb describe-table --table-name "$TABLE_NAME" 2>/dev/null; then
-          echo "Found existing DynamoDB table $TABLE_NAME, deleting..."
-          aws dynamodb delete-table --table-name "$TABLE_NAME" || true
-          echo "⏳ Waiting for DynamoDB table deletion..."
-          aws dynamodb wait table-not-exists --table-name "$TABLE_NAME" || true
-          echo "✅ DynamoDB table $TABLE_NAME deleted"
-        else
-          echo "✅ No existing DynamoDB table found: $TABLE_NAME"
-        fi
-        
-        # 10. Clean up existing API Gateway
-        echo "Cleaning up existing API Gateway..."
-        API_NAME="url-shortener-api"
-        API_ID=$(aws apigatewayv2 get-apis --query "Items[?Name=='$API_NAME'].ApiId | [0]" --output text 2>/dev/null || echo "None")
-        if [ "$API_ID" != "None" ] && [ -n "$API_ID" ]; then
-          echo "Found existing API Gateway $API_NAME with ID: $API_ID, deleting..."
-          aws apigatewayv2 delete-api --api-id "$API_ID" || true
-          echo "✅ API Gateway $API_NAME deleted"
-        else
-          echo "✅ No existing API Gateway found: $API_NAME"
-        fi
-        
-        # 11. Clean up CloudWatch alarms
-        echo "Cleaning up CloudWatch alarms..."
-        for alarm_name in "url-shortener-lambda-errors" "url-shortener-api-errors" "url-shortener-dynamodb-errors" "url-shortener-dynamodb-throttles"; do
-          echo "Checking for alarm: $alarm_name"
-          if aws cloudwatch describe-alarms --alarm-names "$alarm_name" --query 'MetricAlarms[0]' --output text 2>/dev/null | grep -v "None"; then
-            echo "Found existing alarm $alarm_name, deleting..."
-            aws cloudwatch delete-alarms --alarm-names "$alarm_name" || true
-            echo "✅ CloudWatch alarm $alarm_name deleted"
-          else
-            echo "✅ No existing alarm found: $alarm_name"
-          fi
-        done
-        
-        # 12. Clean up CloudWatch Log Groups
-        echo "Cleaning up CloudWatch Log Groups..."
-        for log_group in "/aws/lambda/url-shortener-shorten" "/aws/lambda/url-shortener-redirect" "/aws/lambda/url-shortener-options"; do
-          echo "Checking for log group: $log_group"
-          if aws logs describe-log-groups --log-group-name-prefix "$log_group" --query 'logGroups[?logGroupName==`'$log_group'`]' --output text 2>/dev/null | grep -q "$log_group"; then
-            echo "Found existing log group $log_group, deleting..."
-            aws logs delete-log-group --log-group-name "$log_group" || true
-            echo "✅ CloudWatch log group $log_group deleted"
-          else
-            echo "✅ No existing log group found: $log_group"
-          fi
-        done
-        
-        # 13. Clean up XRay Sampling Rule
-        echo "Cleaning up XRay Sampling Rule..."
-        SAMPLING_RULE_NAME="url-shortener-sampling"
-        if aws xray get-sampling-rules --query "SamplingRuleRecords[?SamplingRule.RuleName=='$SAMPLING_RULE_NAME']" --output text 2>/dev/null | grep -q "$SAMPLING_RULE_NAME"; then
-          echo "Found existing XRay sampling rule $SAMPLING_RULE_NAME, deleting..."
-          aws xray delete-sampling-rule --rule-name "$SAMPLING_RULE_NAME" || true
-          echo "✅ XRay sampling rule $SAMPLING_RULE_NAME deleted"
-        else
-          echo "✅ No existing XRay sampling rule found: $SAMPLING_RULE_NAME"
-        fi
-        
-        # 14. Clean up WAFv2 Web ACL (comprehensive cleanup)
-        echo "Cleaning up WAFv2 Web ACL..."
-        WEB_ACL_NAME="url-shortener-api-protection"
-        
-        # Check both CLOUDFRONT and REGIONAL scopes
-        for SCOPE in "CLOUDFRONT" "REGIONAL"; do
-          echo "Checking WAFv2 Web ACL in $SCOPE scope..."
-          
-          # Set the correct region for the scope
-          if [ "$SCOPE" = "CLOUDFRONT" ]; then
-            REGION="us-east-1"  # CloudFront requires us-east-1
-          else
-            REGION="$AWS_REGION"  # Use the configured region for REGIONAL
-          fi
-          
-          WEB_ACL_ID=$(aws wafv2 list-web-acls --scope "$SCOPE" --region "$REGION" --query "WebACLs[?Name=='$WEB_ACL_NAME'].Id | [0]" --output text 2>/dev/null || echo "None")
-          
-          if [ "$WEB_ACL_ID" != "None" ] && [ -n "$WEB_ACL_ID" ]; then
-            echo "Found existing WAFv2 Web ACL $WEB_ACL_NAME with ID: $WEB_ACL_ID in $SCOPE scope"
-            
-            # Get the lock token
-            LOCK_TOKEN=$(aws wafv2 get-web-acl --scope "$SCOPE" --region "$REGION" --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" --query 'LockToken' --output text 2>/dev/null || echo "")
-            
-            if [ ! -z "$LOCK_TOKEN" ] && [ "$LOCK_TOKEN" != "None" ]; then
-              echo "Deleting WAFv2 Web ACL $WEB_ACL_NAME (ID: $WEB_ACL_ID) from $SCOPE scope..."
-              aws wafv2 delete-web-acl --scope "$SCOPE" --region "$REGION" --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" --lock-token "$LOCK_TOKEN" || true
-              echo "✅ WAFv2 Web ACL $WEB_ACL_NAME deleted from $SCOPE scope"
-            else
-              echo "⚠️ Could not get lock token for WAFv2 Web ACL $WEB_ACL_NAME in $SCOPE scope"
-            fi
-          else
-            echo "✅ No existing WAFv2 Web ACL found in $SCOPE scope: $WEB_ACL_NAME"
-          fi
-        done
-        
-        # 15. Clean up ACM certificates
+        # 8. Clean up ACM certificates
         echo "Cleaning up ACM certificates..."
         for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
@@ -409,11 +344,40 @@ jobs:
           fi
         done
         
-        # Wait a bit for AWS eventual consistency
-        echo "⏳ Waiting 30 seconds for AWS eventual consistency..."
-        sleep 30
+        # Wait for AWS eventual consistency and any remaining CloudFront operations
+        echo "⏳ Waiting 60 seconds for AWS eventual consistency and CloudFront operations..."
+        sleep 60
         
         echo "✅ Resource cleanup completed!"
+
+    - name: Pre-deployment CloudFront verification
+      run: |
+        echo "🔍 Verifying no conflicting CloudFront distributions exist..."
+        
+        # Check for any remaining distributions with our CNAMEs
+        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+          CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$domain')].Id | [0]" --output text 2>/dev/null || echo "None")
+          
+          if [ "$CF_ID" != "None" ] && [ -n "$CF_ID" ]; then
+            ENABLED=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.DistributionConfig.Enabled' --output text 2>/dev/null || echo "false")
+            STATUS=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.Status' --output text 2>/dev/null || echo "Unknown")
+            
+            echo "⚠️ WARNING: Found existing CloudFront distribution for $domain:"
+            echo "   Distribution ID: $CF_ID"
+            echo "   Enabled: $ENABLED"
+            echo "   Status: $STATUS"
+            
+            if [ "$ENABLED" = "true" ] || [ "$STATUS" != "Deployed" ]; then
+              echo "❌ This distribution may cause deployment conflicts!"
+            else
+              echo "ℹ️ Distribution is disabled and deployed - should be safe to proceed"
+            fi
+          else
+            echo "✅ No conflicting CloudFront distribution found for $domain"
+          fi
+        done
+        
+        echo "🏁 CloudFront verification completed"
 
     - name: Terraform Plan
       working-directory: terraform
