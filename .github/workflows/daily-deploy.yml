@@ -48,42 +48,61 @@ jobs:
       working-directory: terraform
       run: terraform init
 
-    - name: Clean up existing conflicting resources
+    - name: Setup cleanup environment
       run: |
-        echo "🧹 Cleaning up existing AWS resources that might conflict..."
+        echo "🧹 Setting up cleanup environment..."
         
-        # Get AWS Account ID
+        # Get AWS Account ID and export for other steps
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
         
-        # 1. Clean up S3 bucket and its contents
-        echo "Cleaning up S3 bucket..."
-        if aws s3 ls s3://yee-fei-url-shortener-frontend 2>/dev/null; then
+        # Define common resource names
+        echo "S3_BUCKET_NAME=yee-fei-url-shortener-frontend" >> $GITHUB_ENV
+        echo "IAM_POLICY_NAME=url-shortener-lambda-enhanced" >> $GITHUB_ENV
+        echo "DYNAMODB_TABLE_NAME=UrlTable" >> $GITHUB_ENV
+        echo "XRAY_SAMPLING_RULE_NAME=url-shortener-sampling" >> $GITHUB_ENV
+        echo "WAF_WEB_ACL_NAME=url-shortener-api-protection" >> $GITHUB_ENV
+        echo "API_DOMAIN_NAME=short.sctp-sandbox.com" >> $GITHUB_ENV
+        echo "FRONTEND_DOMAIN_NAME=ui.sctp-sandbox.com" >> $GITHUB_ENV
+        
+        echo "✅ Cleanup environment setup completed"
+
+    - name: Clean S3 resources
+      run: |
+        echo "🗄️ Cleaning up S3 resources..."
+        
+        if aws s3 ls s3://$S3_BUCKET_NAME 2>/dev/null; then
           echo "Found existing S3 bucket, emptying and deleting..."
-          aws s3 rm s3://yee-fei-url-shortener-frontend --recursive || true
-          aws s3 rb s3://yee-fei-url-shortener-frontend --force || true
-          echo "✅ S3 bucket cleaned up"
+          aws s3 rm s3://$S3_BUCKET_NAME --recursive || true
+          aws s3 rb s3://$S3_BUCKET_NAME --force || true
+          echo "✅ S3 bucket $S3_BUCKET_NAME cleaned up"
         else
-          echo "✅ No existing S3 bucket found"
+          echo "✅ No existing S3 bucket found: $S3_BUCKET_NAME"
         fi
+
+    - name: Clean IAM resources
+      run: |
+        echo "🔐 Cleaning up IAM resources..."
         
-        # 2. Clean up IAM policy
-        echo "Cleaning up IAM policy..."
-        POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/url-shortener-lambda-enhanced"
+        POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/$IAM_POLICY_NAME"
         if aws iam get-policy --policy-arn "$POLICY_ARN" 2>/dev/null; then
           echo "Found existing IAM policy, detaching and deleting..."
+          
           # Detach from any roles/users/groups
           aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyRoles[].RoleName' --output text | xargs -r -I {} aws iam detach-role-policy --role-name {} --policy-arn "$POLICY_ARN" || true
           aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyUsers[].UserName' --output text | xargs -r -I {} aws iam detach-user-policy --user-name {} --policy-arn "$POLICY_ARN" || true
           aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyGroups[].GroupName' --output text | xargs -r -I {} aws iam detach-group-policy --group-name {} --policy-arn "$POLICY_ARN" || true
+          
           # Delete the policy
           aws iam delete-policy --policy-arn "$POLICY_ARN" || true
-          echo "✅ IAM policy cleaned up"
+          echo "✅ IAM policy $IAM_POLICY_NAME cleaned up"
         else
-          echo "✅ No existing IAM policy found"
+          echo "✅ No existing IAM policy found: $IAM_POLICY_NAME"
         fi
-        
-        # 3. Clean up Lambda functions
-        echo "🔄 Cleaning up Lambda functions..."
+
+    - name: Clean Lambda functions
+      run: |
+        echo "⚡ Cleaning up Lambda functions..."
         
         # List of Lambda functions to clean up
         LAMBDA_FUNCTIONS=("shorten_url" "redirect_url" "options_handler")
@@ -91,11 +110,9 @@ jobs:
         for FUNCTION_NAME in "${LAMBDA_FUNCTIONS[@]}"; do
           echo "Checking Lambda function: $FUNCTION_NAME"
           
-          # Check if function exists
           if aws lambda get-function --function-name "$FUNCTION_NAME" > /dev/null 2>&1; then
             echo "Found existing Lambda function $FUNCTION_NAME, deleting..."
             
-            # Delete function
             if aws lambda delete-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
               echo "✅ Successfully deleted Lambda function $FUNCTION_NAME"
             else
@@ -107,27 +124,29 @@ jobs:
         done
         
         echo "🏁 Lambda functions cleanup completed"
+
+    - name: Clean DynamoDB table
+      run: |
+        echo "�️ Cleaning up DynamoDB table..."
         
-        # 4. Clean up DynamoDB table
-        echo "🔄 Cleaning up DynamoDB table..."
-        
-        TABLE_NAME="UrlTable"
-        if aws dynamodb describe-table --table-name "$TABLE_NAME" > /dev/null 2>&1; then
-          echo "Found existing DynamoDB table $TABLE_NAME, deleting..."
-          if aws dynamodb delete-table --table-name "$TABLE_NAME" 2>/dev/null; then
-            echo "✅ Successfully initiated deletion of DynamoDB table $TABLE_NAME"
+        if aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME" > /dev/null 2>&1; then
+          echo "Found existing DynamoDB table $DYNAMODB_TABLE_NAME, deleting..."
+          if aws dynamodb delete-table --table-name "$DYNAMODB_TABLE_NAME" 2>/dev/null; then
+            echo "✅ Successfully initiated deletion of DynamoDB table $DYNAMODB_TABLE_NAME"
             # Wait a bit for deletion to start
             sleep 10
           else
-            echo "⚠️ Failed to delete DynamoDB table $TABLE_NAME"
+            echo "⚠️ Failed to delete DynamoDB table $DYNAMODB_TABLE_NAME"
           fi
         else
-          echo "✅ No existing DynamoDB table found: $TABLE_NAME"
+          echo "✅ No existing DynamoDB table found: $DYNAMODB_TABLE_NAME"
         fi
+
+    - name: Clean CloudWatch resources
+      run: |
+        echo "� Cleaning up CloudWatch resources..."
         
-        # 5. Clean up CloudWatch Log Groups
-        echo "🔄 Cleaning up CloudWatch Log Groups..."
-        
+        # Clean up Log Groups
         LOG_GROUPS=("/aws/lambda/url-shortener-shorten" "/aws/lambda/url-shortener-redirect" "/aws/lambda/url-shortener-options")
         
         for LOG_GROUP in "${LOG_GROUPS[@]}"; do
@@ -145,56 +164,73 @@ jobs:
           fi
         done
         
-        # 6. Clean up X-Ray sampling rule
-        echo "🔄 Cleaning up X-Ray sampling rule..."
-        
-        SAMPLING_RULE_NAME="url-shortener-sampling"
-        # Check if rule exists by listing all rules and filtering
-        if aws xray get-sampling-rules --query "SamplingRuleRecords[?SamplingRule.RuleName=='$SAMPLING_RULE_NAME'].SamplingRule.RuleName" --output text 2>/dev/null | grep -q "$SAMPLING_RULE_NAME"; then
-          echo "Found existing X-Ray sampling rule $SAMPLING_RULE_NAME, deleting..."
-          # Add timeout to avoid hanging
-          if timeout 30 aws xray delete-sampling-rule --rule-name "$SAMPLING_RULE_NAME" 2>/dev/null; then
-            echo "✅ Successfully deleted X-Ray sampling rule $SAMPLING_RULE_NAME"
+        # Clean up query definitions
+        echo "Cleaning up CloudWatch query definitions..."
+        for query_name in "url-shortener-error-analysis" "url-shortener-performance-analysis"; do
+          echo "Checking for query definition: $query_name"
+          
+          QUERY_DEF=$(aws logs describe-query-definitions --query-definition-name-prefix "$query_name" --query "queryDefinitions[?name=='$query_name']" --output json 2>/dev/null || echo "[]")
+          
+          if [ "$(echo "$QUERY_DEF" | jq length)" -gt 0 ]; then
+            echo "Found query definition $query_name, deleting..."
+            aws logs delete-query-definition --query-definition-id "$(echo "$QUERY_DEF" | jq -r '.[0].queryDefinitionId')" || true
+            echo "✅ Query definition $query_name deleted"
           else
-            echo "⚠️ Failed to delete X-Ray sampling rule $SAMPLING_RULE_NAME (timeout or error)"
+            echo "✅ No query definition found for $query_name"
+          fi
+        done
+
+    - name: Clean X-Ray resources
+      run: |
+        echo "� Cleaning up X-Ray resources..."
+        
+        # Check if X-Ray sampling rule exists by listing all rules and filtering
+        if aws xray get-sampling-rules --query "SamplingRuleRecords[?SamplingRule.RuleName=='$XRAY_SAMPLING_RULE_NAME'].SamplingRule.RuleName" --output text 2>/dev/null | grep -q "$XRAY_SAMPLING_RULE_NAME"; then
+          echo "Found existing X-Ray sampling rule $XRAY_SAMPLING_RULE_NAME, deleting..."
+          # Add timeout to avoid hanging
+          if timeout 30 aws xray delete-sampling-rule --rule-name "$XRAY_SAMPLING_RULE_NAME" 2>/dev/null; then
+            echo "✅ Successfully deleted X-Ray sampling rule $XRAY_SAMPLING_RULE_NAME"
+          else
+            echo "⚠️ Failed to delete X-Ray sampling rule $XRAY_SAMPLING_RULE_NAME (timeout or error)"
           fi
         else
-          echo "✅ No existing X-Ray sampling rule found: $SAMPLING_RULE_NAME"
+          echo "✅ No existing X-Ray sampling rule found: $XRAY_SAMPLING_RULE_NAME"
         fi
+
+    - name: Clean WAF resources
+      run: |
+        echo "�️ Cleaning up WAF resources..."
         
-        # 7. Clean up WAF Web ACL
-        echo "🔄 Cleaning up WAF Web ACL..."
-        
-        WEB_ACL_NAME="url-shortener-api-protection"
         WEB_ACL_SCOPE="REGIONAL"
         
         # Get Web ACL details if it exists
-        WEB_ACL_INFO=$(aws wafv2 list-web-acls --scope "$WEB_ACL_SCOPE" --query "WebACLs[?Name=='$WEB_ACL_NAME']" --output json 2>/dev/null || echo "[]")
+        WEB_ACL_INFO=$(aws wafv2 list-web-acls --scope "$WEB_ACL_SCOPE" --query "WebACLs[?Name=='$WAF_WEB_ACL_NAME']" --output json 2>/dev/null || echo "[]")
         
         if [ "$(echo "$WEB_ACL_INFO" | jq length)" -gt 0 ]; then
           WEB_ACL_ID=$(echo "$WEB_ACL_INFO" | jq -r '.[0].Id')
-          echo "Found existing WAF Web ACL $WEB_ACL_NAME with ID: $WEB_ACL_ID"
+          echo "Found existing WAF Web ACL $WAF_WEB_ACL_NAME with ID: $WEB_ACL_ID"
           
           # Get fresh lock token for deletion (lock tokens change frequently)
-          FRESH_WEB_ACL_INFO=$(aws wafv2 get-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" 2>/dev/null || echo "{}")
+          FRESH_WEB_ACL_INFO=$(aws wafv2 get-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --name "$WAF_WEB_ACL_NAME" 2>/dev/null || echo "{}")
           LOCK_TOKEN=$(echo "$FRESH_WEB_ACL_INFO" | jq -r '.LockToken // empty')
           
           if [ -n "$LOCK_TOKEN" ]; then
             echo "Attempting to delete WAF Web ACL with fresh lock token..."
-            if aws wafv2 delete-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" --lock-token "$LOCK_TOKEN" 2>/dev/null; then
-              echo "✅ Successfully deleted WAF Web ACL $WEB_ACL_NAME"
+            if aws wafv2 delete-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --name "$WAF_WEB_ACL_NAME" --lock-token "$LOCK_TOKEN" 2>/dev/null; then
+              echo "✅ Successfully deleted WAF Web ACL $WAF_WEB_ACL_NAME"
             else
-              echo "⚠️ Failed to delete WAF Web ACL $WEB_ACL_NAME (may be associated with resources)"
+              echo "⚠️ Failed to delete WAF Web ACL $WAF_WEB_ACL_NAME (may be associated with resources)"
             fi
           else
-            echo "⚠️ Could not get lock token for WAF Web ACL $WEB_ACL_NAME"
+            echo "⚠️ Could not get lock token for WAF Web ACL $WAF_WEB_ACL_NAME"
           fi
         else
-          echo "✅ No existing WAF Web ACL found: $WEB_ACL_NAME"
+          echo "✅ No existing WAF Web ACL found: $WAF_WEB_ACL_NAME"
         fi
-        
-        # 8. Clean up CloudFront distributions (Enhanced with proper deletion)
-        echo "🔄 Starting CloudFront distributions cleanup..."
+
+    - name: Clean CloudFront distributions
+      run: |
+        echo "☁️ Starting CloudFront distributions cleanup..."
         
         # Function to wait for CloudFront distribution status
         wait_for_cloudfront_status() {
@@ -227,7 +263,7 @@ jobs:
         }
         
         # Check for distributions with our CNAMEs
-        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+        for domain in "$FRONTEND_DOMAIN_NAME" "$API_DOMAIN_NAME"; do
           echo "🔍 Looking for CloudFront distribution with CNAME: $domain"
           
           CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$domain')].Id | [0]" --output text 2>/dev/null || echo "None")
@@ -296,23 +332,30 @@ jobs:
         done
         
         echo "🏁 CloudFront cleanup completed"
+        echo "🏁 CloudFront cleanup completed"
+
+    - name: Clean API Gateway resources
+      run: |
+        echo "🚪 Cleaning up API Gateway resources..."
         
-        # 9. Clean up API Gateway custom domain
-        echo "Cleaning up API Gateway custom domain..."
-        if aws apigatewayv2 get-domain-name --domain-name "short.sctp-sandbox.com" 2>/dev/null; then
+        if aws apigatewayv2 get-domain-name --domain-name "$API_DOMAIN_NAME" 2>/dev/null; then
           echo "Found existing API Gateway custom domain, deleting..."
-          aws apigatewayv2 delete-domain-name --domain-name "short.sctp-sandbox.com" || true
+          aws apigatewayv2 delete-domain-name --domain-name "$API_DOMAIN_NAME" || true
           echo "✅ API Gateway custom domain cleaned up"
         else
-          echo "✅ No existing API Gateway custom domain found"
+          echo "✅ No existing API Gateway custom domain found: $API_DOMAIN_NAME"
         fi
+
+    - name: Clean Route53 DNS records
+      run: |
+        echo "🌐 Cleaning up Route53 DNS records..."
         
-                # 10. Clean up Route53 DNS validation records (only for API domain)
-        echo "Cleaning up Route53 DNS validation records for our domains..."
         ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
         if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
-          # Only delete validation records for our specific domains
-          for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+          
+          # Clean DNS validation records
+          echo "Cleaning up DNS validation records for our domains..."
+          for domain in "$FRONTEND_DOMAIN_NAME" "$API_DOMAIN_NAME"; do
             echo "Looking for validation records for $domain..."
             
             # Find validation CNAME records that end with our domain
@@ -345,16 +388,10 @@ jobs:
               aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/delete-record.json || true
             done
           done
-          echo "✅ DNS validation records for our domains cleaned up"
-        else
-          echo "✅ No hosted zone found or no records to clean"
-        fi
-        
-                # 11. Clean up Route53 A records (only for API domain)
-        echo "Cleaning up Route53 A records for our domains..."
-        ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
-        if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
-          for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+          
+          # Clean A records
+          echo "Cleaning up A records for our domains..."
+          for domain in "$FRONTEND_DOMAIN_NAME" "$API_DOMAIN_NAME"; do
             echo "Looking for A record for $domain..."
             
             # Find A records for our specific domains
@@ -417,28 +454,17 @@ jobs:
               echo "✅ No A record found for $domain"
             fi
           done
+          
+          echo "✅ DNS records cleaned up"
+        else
+          echo "✅ No hosted zone found or no records to clean"
         fi
+
+    - name: Clean ACM certificates
+      run: |
+        echo "🔒 Cleaning up ACM certificates..."
         
-        # 12. Clean up CloudWatch query definitions
-        echo "Cleaning up CloudWatch query definitions..."
-        for query_name in "url-shortener-error-analysis" "url-shortener-performance-analysis"; do
-          echo "Checking for query definition: $query_name"
-          
-          # Get query definition
-          QUERY_DEF=$(aws logs describe-query-definitions --query-definition-name-prefix "$query_name" --query "queryDefinitions[?name=='$query_name']" --output json 2>/dev/null || echo "[]")
-          
-          if [ "$(echo "$QUERY_DEF" | jq length)" -gt 0 ]; then
-            echo "Found query definition $query_name, deleting..."
-            aws logs delete-query-definition --query-definition-id "$(echo "$QUERY_DEF" | jq -r '.[0].queryDefinitionId')" || true
-            echo "✅ Query definition $query_name deleted"
-          else
-            echo "✅ No query definition found for $query_name"
-          fi
-        done
-        
-        # 13. Clean up ACM certificates (only API certificate)
-        echo "Cleaning up ACM certificates..."
-        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+        for domain in "$FRONTEND_DOMAIN_NAME" "$API_DOMAIN_NAME"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")
           if [ "$CERT_ARN" != "None" ] && [ -n "$CERT_ARN" ]; then
             echo "Found certificate for $domain, checking if it's in use..."
@@ -454,9 +480,13 @@ jobs:
             echo "✅ No certificate found for $domain"
           fi
         done
+
+    - name: Final cleanup and consistency wait
+      run: |
+        echo "⏳ Final cleanup and AWS consistency wait..."
         
         # Wait for AWS eventual consistency and any remaining CloudFront operations
-        echo "⏳ Waiting 60 seconds for AWS eventual consistency and CloudFront operations..."
+        echo "Waiting 60 seconds for AWS eventual consistency and CloudFront operations..."
         sleep 60
         
         echo "✅ Resource cleanup completed!"
@@ -466,7 +496,7 @@ jobs:
         echo "🔍 Verifying no conflicting CloudFront distributions exist..."
         
         # Check for any remaining distributions with our CNAMEs
-        for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
+        for domain in "$FRONTEND_DOMAIN_NAME" "$API_DOMAIN_NAME"; do
           CF_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$domain')].Id | [0]" --output text 2>/dev/null || echo "None")
           
           if [ "$CF_ID" != "None" ] && [ -n "$CF_ID" ]; then
