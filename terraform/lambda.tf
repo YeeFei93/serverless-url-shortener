@@ -1,11 +1,11 @@
 # Lambda functions for URL shortener
+
+# Lambda functions for URL shortener (Docker image deployment)
 resource "aws_lambda_function" "shorten_url" {
-  filename         = "${path.module}/../lambda/shorten.zip"
   function_name    = "shorten_url"
   role             = data.aws_iam_role.lambda_exec.arn
-  handler          = "shorten.lambda_handler"
-  runtime          = "python3.9"
-  source_code_hash = filebase64sha256("${path.module}/../lambda/shorten.zip")
+  package_type     = "Image"
+  image_uri        = "${var.shorten_image_uri}"
 
   tracing_config {
     mode = "Active"
@@ -17,12 +17,10 @@ resource "aws_lambda_function" "shorten_url" {
 }
 
 resource "aws_lambda_function" "redirect_url" {
-  filename         = "${path.module}/../lambda/redirect.zip"
   function_name    = "redirect_url"
   role             = data.aws_iam_role.lambda_exec.arn
-  handler          = "redirect.lambda_handler"
-  runtime          = "python3.9"
-  source_code_hash = filebase64sha256("${path.module}/../lambda/redirect.zip")
+  package_type     = "Image"
+  image_uri        = "${var.redirect_image_uri}"
 
   tracing_config {
     mode = "Active"
@@ -34,12 +32,10 @@ resource "aws_lambda_function" "redirect_url" {
 }
 
 resource "aws_lambda_function" "options_lambda" {
-  filename         = "${path.module}/../lambda/options.zip"
   function_name    = "options_handler"
   role             = data.aws_iam_role.lambda_exec.arn
-  handler          = "options.lambda_handler"
-  runtime          = "python3.9"
-  source_code_hash = filebase64sha256("${path.module}/../lambda/options.zip")
+  package_type     = "Image"
+  image_uri        = "${var.options_image_uri}"
 
   tracing_config {
     mode = "Active"

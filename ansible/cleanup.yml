@@ -1,0 +1,176 @@
+---
+# Ansible playbook for cleaning up serverless URL shortener infrastructure
+- name: Clean Up Serverless URL Shortener Infrastructure
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    aws_region: "{{ aws_region | default('us-east-1') }}"
+    project_name: "serverless-url-shortener"
+    
+    # Resource names (consistent with other deployment methods)
+    lambda_functions:
+      - "shorten_url"
+      - "redirect_url" 
+      - "options_handler"
+    dynamodb_table_name: "UrlTable"
+    s3_bucket_name: "yee-fei-url-shortener-frontend"
+    iam_policy_name: "url-shortener-lambda-enhanced"
+    domains:
+      - "ui.sctp-sandbox.com"
+      - "short.sctp-sandbox.com"
+    
+  tasks:
+    - name: Get AWS account information
+      command: aws sts get-caller-identity
+      register: aws_identity
+      changed_when: false
+      
+    - name: Display cleanup target
+      debug:
+        msg: "🧹 Cleaning up resources in AWS Account: {{ (aws_identity.stdout | from_json).Account }} ({{ aws_region }})"
+    
+    - name: Clean S3 bucket
+      block:
+        - name: Empty S3 bucket
+          command: >
+            aws s3 rm s3://{{ s3_bucket_name }} --recursive
+          register: s3_empty
+          ignore_errors: yes
+          
+        - name: Delete S3 bucket
+          command: >
+            aws s3 rb s3://{{ s3_bucket_name }} --force
+          register: s3_delete
+          ignore_errors: yes
+          when: s3_empty is succeeded
+          
+        - name: Display S3 cleanup result
+          debug:
+            msg: "✅ S3 bucket {{ s3_bucket_name }} cleaned up"
+          when: s3_delete is succeeded
+          
+    - name: Clean Lambda functions
+      command: >
+        aws lambda delete-function
+        --function-name {{ item }}
+        --region {{ aws_region }}
+      register: lambda_cleanup
+      loop: "{{ lambda_functions }}"
+      ignore_errors: yes
+      
+    - name: Display Lambda cleanup results
+      debug:
+        msg: "{{ '✅' if item.rc == 0 else '⚠️' }} Lambda function {{ item.item }}: {{ 'deleted' if item.rc == 0 else 'not found or failed to delete' }}"
+      loop: "{{ lambda_cleanup.results }}"
+      
+    - name: Clean DynamoDB table
+      command: >
+        aws dynamodb delete-table
+        --table-name {{ dynamodb_table_name }}
+        --region {{ aws_region }}
+      register: dynamodb_cleanup
+      ignore_errors: yes
+      
+    - name: Display DynamoDB cleanup result
+      debug:
+        msg: "{{ '✅' if dynamodb_cleanup.rc == 0 else '⚠️' }} DynamoDB table {{ dynamodb_table_name }}: {{ 'deletion initiated' if dynamodb_cleanup.rc == 0 else 'not found or failed to delete' }}"
+        
+    - name: Clean CloudWatch Log Groups
+      command: >
+        aws logs delete-log-group
+        --log-group-name /aws/lambda/url-shortener-{{ item.split('_')[0] }}
+        --region {{ aws_region }}
+      register: log_cleanup
+      loop: "{{ lambda_functions }}"
+      ignore_errors: yes
+      
+    - name: Display Log Groups cleanup results
+      debug:
+        msg: "{{ '✅' if item.rc == 0 else '⚠️' }} Log group for {{ item.item }}: {{ 'deleted' if item.rc == 0 else 'not found or failed to delete' }}"
+      loop: "{{ log_cleanup.results }}"
+      
+    - name: Get CloudFront distributions for cleanup
+      command: >
+        aws cloudfront list-distributions
+        --query "DistributionList.Items[?Aliases.Items && (contains(Aliases.Items, '{{ domains[0] }}') || contains(Aliases.Items, '{{ domains[1] }}'))].Id"
+        --output text
+        --region {{ aws_region }}
+      register: cloudfront_distributions
+      ignore_errors: yes
+      
+    - name: Display CloudFront cleanup info
+      debug:
+        msg: |
+          ⚠️ CloudFront distributions found: {{ cloudfront_distributions.stdout.split() | length if cloudfront_distributions.stdout else 0 }}
+          Note: CloudFront cleanup requires manual intervention due to complexity.
+          Use the manual cleanup script or GitHub Actions workflow for proper CloudFront cleanup.
+      when: cloudfront_distributions.stdout | length > 0
+      
+    - name: Clean API Gateway custom domains
+      command: >
+        aws apigatewayv2 delete-domain-name
+        --domain-name {{ domains[1] }}
+        --region {{ aws_region }}
+      register: api_domain_cleanup
+      ignore_errors: yes
+      
+    - name: Display API Gateway cleanup result
+      debug:
+        msg: "{{ '✅' if api_domain_cleanup.rc == 0 else '⚠️' }} API Gateway domain {{ domains[1] }}: {{ 'deleted' if api_domain_cleanup.rc == 0 else 'not found or failed to delete' }}"
+        
+    - name: Generate cleanup summary
+      copy:
+        content: |
+          # Serverless URL Shortener - Cleanup Summary
+          Generated: {{ ansible_date_time.iso8601 }}
+          AWS Account: {{ (aws_identity.stdout | from_json).Account }}
+          Region: {{ aws_region }}
+          
+          ## Resources Cleaned Up
+          
+          ### S3 Bucket
+          - {{ s3_bucket_name }}: {{ 'DELETED' if s3_delete is succeeded else 'FAILED/NOT FOUND' }}
+          
+          ### Lambda Functions
+          {% for result in lambda_cleanup.results %}
+          - {{ result.item }}: {{ 'DELETED' if result.rc == 0 else 'FAILED/NOT FOUND' }}
+          {% endfor %}
+          
+          ### DynamoDB Table
+          - {{ dynamodb_table_name }}: {{ 'DELETION INITIATED' if dynamodb_cleanup.rc == 0 else 'FAILED/NOT FOUND' }}
+          
+          ### CloudWatch Log Groups
+          {% for result in log_cleanup.results %}
+          - /aws/lambda/url-shortener-{{ result.item.split('_')[0] }}: {{ 'DELETED' if result.rc == 0 else 'FAILED/NOT FOUND' }}
+          {% endfor %}
+          
+          ### API Gateway Domain
+          - {{ domains[1] }}: {{ 'DELETED' if api_domain_cleanup.rc == 0 else 'FAILED/NOT FOUND' }}
+          
+          ## Manual Steps Required
+          
+          {% if cloudfront_distributions.stdout | length > 0 %}
+          ⚠️ **CloudFront distributions found** - use manual cleanup script or GitHub Actions for proper cleanup
+          {% endif %}
+          
+          ⚠️ **Route53 records** - may need manual cleanup if domains were configured
+          ⚠️ **ACM certificates** - may need manual cleanup if not in use
+          ⚠️ **IAM policies** - check for orphaned policies: {{ iam_policy_name }}
+          
+          ## Next Steps
+          
+          1. Wait 5-10 minutes for DynamoDB table deletion to complete
+          2. Check AWS Console for any remaining resources
+          3. Run `terraform destroy` if using Terraform for final cleanup
+          4. Use GitHub Actions cleanup workflow for comprehensive cleanup
+          
+        dest: "{{ playbook_dir }}/../ansible-cleanup-summary-{{ ansible_date_time.epoch }}.md"
+        
+    - name: Display summary location
+      debug:
+        msg: |
+          🧹 Cleanup completed!
+          📄 Summary saved to: ansible-cleanup-summary-{{ ansible_date_time.epoch }}.md
+          
+          ⚠️ Note: Some resources (CloudFront, Route53, ACM) require manual cleanup
+          Consider using the GitHub Actions cleanup workflow for comprehensive cleanup.
