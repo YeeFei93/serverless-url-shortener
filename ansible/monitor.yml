@@ -7,13 +7,6 @@
     aws_region: "{{ aws_region | default('us-east-1') }}"
     project_name: "serverless-url-shortener"
     
-    # Resource names (consistent with other deployment methods)
-    lambda_functions:
-      - "shorten_url"
-      - "redirect_url" 
-      - "options_handler"
-    dynamodb_table_name: "UrlTable"
-    
   tasks:
     - name: Get AWS account information
       command: aws sts get-caller-identity
@@ -26,7 +19,10 @@
         --function-name {{ item }}
         --region {{ aws_region }}
       register: lambda_status
-      loop: "{{ lambda_functions }}"
+      loop:
+        - "url-shortener-shorten"
+        - "url-shortener-redirect" 
+        - "url-shortener-options"
       changed_when: false
       ignore_errors: yes
       
@@ -36,13 +32,12 @@
           Function: {{ item.item }}
           State: {{ (item.stdout | from_json).Configuration.State if item.rc == 0 else 'NOT FOUND' }}
           Last Modified: {{ (item.stdout | from_json).Configuration.LastModified if item.rc == 0 else 'N/A' }}
-          Runtime: {{ (item.stdout | from_json).Configuration.Runtime if item.rc == 0 else 'N/A' }}
       loop: "{{ lambda_status.results }}"
       
     - name: Check DynamoDB table status
       command: >
         aws dynamodb describe-table
-        --table-name {{ dynamodb_table_name }}
+        --table-name UrlTable
         --region {{ aws_region }}
       register: dynamodb_status
       changed_when: false

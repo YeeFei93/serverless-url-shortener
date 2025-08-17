@@ -1,12 +1,8 @@
 # Ansible inventory for serverless URL shortener
-# This file defines the hosts and groups for deployment
-
 [local]
 localhost ansible_connection=local
 
 [local:vars]
-# Override default variables here if needed
-# aws_region=us-west-2
-# environment=staging
-
-# Global variables are now in group_vars/all.yml for better organization
+aws_region=us-east-1
+environment=prod
+project_name=serverless-url-shortener

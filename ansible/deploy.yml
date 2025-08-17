@@ -8,22 +8,7 @@
     project_name: "serverless-url-shortener"
     environment: "{{ environment | default('prod') }}"
     
-    # Resource names (consistent with other deployment methods)
-    lambda_functions:
-      - "shorten_url"
-      - "redirect_url" 
-      - "options_handler"
-    dynamodb_table_name: "UrlTable"
-    s3_bucket_name: "yee-fei-url-shortener-frontend"
-    
   tasks:
-    - name: Validate required variables
-      assert:
-        that:
-          - aws_region is defined
-          - project_name is defined
-        fail_msg: "Required variables (aws_region, project_name) must be defined"
-        
     - name: Check if AWS CLI is configured
       command: aws sts get-caller-identity
       register: aws_identity
@@ -31,24 +16,23 @@
       
     - name: Display AWS account information
       debug:
-        msg: "Deploying to AWS Account: {{ (aws_identity.stdout | from_json).Account }} in region {{ aws_region }}"
+        msg: "Deploying to AWS Account: {{ (aws_identity.stdout | from_json).Account }}"
         
     - name: Ensure terraform directory exists
       file:
         path: "{{ playbook_dir }}/../terraform"
         state: directory
         
-
-    - name: Build Lambda Docker images and push to ECR
-      command: "{{ playbook_dir }}/../scripts/docker-build.sh"
+    - name: Build Lambda deployment packages
+      command: "{{ playbook_dir }}/../build.sh"
       args:
         chdir: "{{ playbook_dir }}/.."
-      register: docker_build_result
+      register: build_result
       changed_when: true
-
-    - name: Display Docker build results
+      
+    - name: Display build results
       debug:
-        var: docker_build_result.stdout_lines
+        var: build_result.stdout_lines
         
     - name: Initialize Terraform
       command: terraform init
@@ -94,25 +78,15 @@
         url: "{{ item }}"
         method: GET
         timeout: 10
-        status_code: [200, 404, 405]  # Accept various status codes
       register: health_check
       ignore_errors: yes
       loop:
-        - "{{ (terraform_outputs.stdout | from_json).api_gateway_url.value if terraform_outputs.stdout is defined else '' }}/health"
-        - "{{ (terraform_outputs.stdout | from_json).cloudfront_distribution_domain_name.value if terraform_outputs.stdout is defined else '' }}"
-      when: 
-        - terraform_apply is succeeded
-        - terraform_outputs.stdout is defined
-        - item != ""
+        - "{{ (terraform_outputs.stdout | from_json).api_gateway_url.value }}/health"
+        - "{{ (terraform_outputs.stdout | from_json).cloudfront_distribution_domain_name.value }}"
+      when: terraform_apply is succeeded
       
     - name: Display health check results
       debug:
-        msg: |
-          Health check for {{ item.url }}: 
-          Status: {{ item.status | default('FAILED') }} 
-          Result: {{ 'PASSED' if item.status in [200, 404, 405] else 'FAILED' }}
-          {% if item.status is not defined %}
-          Error: {{ item.msg | default('Connection failed') }}
-          {% endif %}
-      loop: "{{ health_check.results | default([]) }}"
-      when: terraform_apply is succeeded
+        msg: "Health check for {{ item.url }}: {{ 'PASSED' if item.status == 200 else 'FAILED' }}"
+      loop: "{{ health_check.results }}"
+      when: terraform_apply is succeeded and health_check is defined

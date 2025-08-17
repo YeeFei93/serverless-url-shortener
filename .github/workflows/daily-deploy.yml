@@ -39,10 +39,10 @@ jobs:
       with:
         terraform_version: ${{ env.TF_VERSION }}
 
-    - name: Build Lambda Docker images and push to ECR
+    - name: Build Lambda packages
       run: |
-        chmod +x ./scripts/docker-build.sh
-        ./scripts/docker-build.sh
+        chmod +x ./scripts/build.sh
+        ./scripts/build.sh
 
     - name: Terraform Init
       working-directory: terraform
