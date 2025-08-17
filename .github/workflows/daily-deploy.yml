@@ -82,7 +82,33 @@ jobs:
           echo "✅ No existing IAM policy found"
         fi
         
-        # 3. Clean up CloudFront distributions (Enhanced with proper deletion)
+        # 3. Clean up Lambda functions
+        echo "🔄 Cleaning up Lambda functions..."
+        
+        # List of Lambda functions to clean up
+        LAMBDA_FUNCTIONS=("shorten_url" "redirect_url" "options_handler")
+        
+        for FUNCTION_NAME in "${LAMBDA_FUNCTIONS[@]}"; do
+          echo "Checking Lambda function: $FUNCTION_NAME"
+          
+          # Check if function exists
+          if aws lambda get-function --function-name "$FUNCTION_NAME" > /dev/null 2>&1; then
+            echo "Found existing Lambda function $FUNCTION_NAME, deleting..."
+            
+            # Delete function
+            if aws lambda delete-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
+              echo "✅ Successfully deleted Lambda function $FUNCTION_NAME"
+            else
+              echo "⚠️ Failed to delete Lambda function $FUNCTION_NAME (may be in use)"
+            fi
+          else
+            echo "✅ No existing Lambda function found: $FUNCTION_NAME"
+          fi
+        done
+        
+        echo "🏁 Lambda functions cleanup completed"
+        
+        # 4. Clean up CloudFront distributions (Enhanced with proper deletion)
         echo "🔄 Starting CloudFront distributions cleanup..."
         
         # Function to wait for CloudFront distribution status
@@ -186,7 +212,7 @@ jobs:
         
         echo "🏁 CloudFront cleanup completed"
         
-        # 4. Clean up API Gateway custom domain
+        # 5. Clean up API Gateway custom domain
         echo "Cleaning up API Gateway custom domain..."
         if aws apigatewayv2 get-domain-name --domain-name "short.sctp-sandbox.com" 2>/dev/null; then
           echo "Found existing API Gateway custom domain, deleting..."
@@ -196,7 +222,7 @@ jobs:
           echo "✅ No existing API Gateway custom domain found"
         fi
         
-        # 5. Clean up Route53 DNS validation records (only for our specific domains)
+                # 6. Clean up Route53 DNS validation records (only for API domain)
         echo "Cleaning up Route53 DNS validation records for our domains..."
         ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
         if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
@@ -239,7 +265,7 @@ jobs:
           echo "✅ No hosted zone found or no records to clean"
         fi
         
-        # 6. Clean up Route53 A records for our domains
+                # 7. Clean up Route53 A records (only for API domain)
         echo "Cleaning up Route53 A records for our domains..."
         ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='sctp-sandbox.com.'].Id | [0]" --output text | cut -d'/' -f3)
         if [ "$ZONE_ID" != "None" ] && [ -n "$ZONE_ID" ]; then
@@ -308,7 +334,7 @@ jobs:
           done
         fi
         
-        # 7. Clean up CloudWatch query definitions
+        # 8. Clean up CloudWatch query definitions
         echo "Cleaning up CloudWatch query definitions..."
         for query_name in "url-shortener-error-analysis" "url-shortener-performance-analysis"; do
           echo "Checking for query definition: $query_name"
@@ -325,7 +351,7 @@ jobs:
           fi
         done
         
-        # 8. Clean up ACM certificates
+        # 9. Clean up ACM certificates (only API certificate)
         echo "Cleaning up ACM certificates..."
         for domain in "ui.sctp-sandbox.com" "short.sctp-sandbox.com"; do
           CERT_ARN=$(aws acm list-certificates --region us-east-1 --query "CertificateSummaryList[?DomainName=='$domain'].CertificateArn | [0]" --output text 2>/dev/null || echo "None")

@@ -63,6 +63,30 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Using AWS Account: $ACCOUNT_ID"
 echo ""
 
+# Also check for Lambda functions that might cause issues
+echo "🔍 Checking for existing Lambda functions..."
+LAMBDA_FUNCTIONS=("shorten_url" "redirect_url" "options_handler")
+LAMBDA_CONFLICTS=false
+
+for FUNCTION_NAME in "${LAMBDA_FUNCTIONS[@]}"; do
+  if aws lambda get-function --function-name "$FUNCTION_NAME" > /dev/null 2>&1; then
+    echo "⚠️ Found existing Lambda function: $FUNCTION_NAME"
+    LAMBDA_CONFLICTS=true
+  else
+    echo "✅ No existing Lambda function: $FUNCTION_NAME"
+  fi
+done
+
+if [ "$LAMBDA_CONFLICTS" = true ]; then
+  echo ""
+  echo "💡 Note: Found existing Lambda functions that might cause deployment delays."
+  echo "   Consider deleting them manually if deployment gets stuck:"
+  for FUNCTION_NAME in "${LAMBDA_FUNCTIONS[@]}"; do
+    echo "   aws lambda delete-function --function-name $FUNCTION_NAME"
+  done
+  echo ""
+fi
+
 DISTRIBUTIONS_FOUND=false
 
 # Check for distributions with our CNAMEs
