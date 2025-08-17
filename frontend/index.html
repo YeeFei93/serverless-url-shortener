@@ -1,28 +1,125 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>URL Shortener</title>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="A simple, fast URL shortener service">
+  <meta name="keywords" content="URL shortener, link shortener, short links">
+  <meta name="author" content="Serverless URL Shortener">
+  <title>URL Shortener - Make Long Links Short</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  
+  <!-- Styles -->
+  <link rel="stylesheet" href="styles.css">
+  
+  <!-- Preconnect to API domain for faster loading -->
+  <link rel="preconnect" href="https://short.sctp-sandbox.com">
 </head>
 <body>
-  <h1>Simple URL Shortener</h1>
-  <input type="text" id="longUrl" placeholder="Enter long URL" size="50" />
-  <button onclick="shorten()">Shorten</button>
-  <p id="result"></p>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <div class="logo">
+        <h1 class="logo-text">🔗 URL Shortener</h1>
+        <p class="logo-subtitle">Make long links short and shareable</p>
+      </div>
+    </div>
+  </header>
 
-  <script>
-    async function shorten() {
-      const url = document.getElementById("longUrl").value;
-      const res = await fetch("https://short.sctp-sandbox.com/shorten", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url })
-      });
+  <!-- Main Content -->
+  <main class="main">
+    <div class="container">
+      <section class="shortener-section" aria-labelledby="shortener-heading">
+        <h2 id="shortener-heading" class="visually-hidden">URL Shortening Tool</h2>
+        
+        <!-- URL Input Form -->
+        <div class="input-group">
+          <div class="input-container">
+            <input 
+              type="url" 
+              id="longUrl" 
+              class="url-input" 
+              placeholder="Enter your long URL here..." 
+              aria-label="Long URL to shorten"
+              aria-describedby="url-help"
+              autocomplete="url"
+              spellcheck="false"
+              required
+            />
+            <div id="url-help" class="input-help">
+              Enter a valid URL (e.g., https://example.com/very/long/path)
+            </div>
+          </div>
+          <button 
+            id="shortenBtn" 
+            class="shorten-btn" 
+            onclick="shorten()"
+            aria-describedby="button-help"
+          >
+            <span class="btn-text">Shorten URL</span>
+            <span class="btn-loader" aria-hidden="true">
+              <div class="spinner"></div>
+            </span>
+          </button>
+          <div id="button-help" class="visually-hidden">
+            Click to create a shortened version of your URL
+          </div>
+        </div>
 
-      const data = await res.json();
-      document.getElementById("result").innerHTML =
-        `Short URL: <a href="${data.short_url}" target="_blank">${data.short_url}</a>`;
-    }
-  </script>
+        <!-- Results Area -->
+        <div id="result" class="result-container" role="region" aria-live="polite" aria-label="Shortening results">
+          <!-- Results will appear here -->
+        </div>
+
+        <!-- Error Messages -->
+        <div id="error" class="error-container" role="alert" aria-live="assertive">
+          <!-- Error messages will appear here -->
+        </div>
+      </section>
+
+      <!-- Features Section -->
+      <section class="features-section">
+        <h2 class="section-title">Why Choose Our URL Shortener?</h2>
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon">⚡</div>
+            <h3 class="feature-title">Lightning Fast</h3>
+            <p class="feature-description">Create short URLs in milliseconds with our serverless architecture</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">🔒</div>
+            <h3 class="feature-title">Secure & Reliable</h3>
+            <p class="feature-description">Built on AWS with enterprise-grade security and 99.9% uptime</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">📊</div>
+            <h3 class="feature-title">No Tracking</h3>
+            <p class="feature-description">We don't track your links or collect personal data</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-content">
+        <p>&copy; 2025 Serverless URL Shortener. Built with ❤️ and AWS.</p>
+        <div class="footer-links">
+          <a href="#" class="footer-link">Privacy</a>
+          <a href="#" class="footer-link">Terms</a>
+          <a href="https://github.com/YeeFei93/serverless-url-shortener" class="footer-link" target="_blank" rel="noopener noreferrer">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="config.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
