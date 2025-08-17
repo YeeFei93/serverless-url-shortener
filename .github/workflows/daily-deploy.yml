@@ -149,12 +149,14 @@ jobs:
         echo "🔄 Cleaning up X-Ray sampling rule..."
         
         SAMPLING_RULE_NAME="url-shortener-sampling"
-        if aws xray get-sampling-rule --rule-name "$SAMPLING_RULE_NAME" > /dev/null 2>&1; then
+        # Check if rule exists by listing all rules and filtering
+        if aws xray get-sampling-rules --query "SamplingRuleRecords[?SamplingRule.RuleName=='$SAMPLING_RULE_NAME'].SamplingRule.RuleName" --output text 2>/dev/null | grep -q "$SAMPLING_RULE_NAME"; then
           echo "Found existing X-Ray sampling rule $SAMPLING_RULE_NAME, deleting..."
-          if aws xray delete-sampling-rule --rule-name "$SAMPLING_RULE_NAME" 2>/dev/null; then
+          # Add timeout to avoid hanging
+          if timeout 30 aws xray delete-sampling-rule --rule-name "$SAMPLING_RULE_NAME" 2>/dev/null; then
             echo "✅ Successfully deleted X-Ray sampling rule $SAMPLING_RULE_NAME"
           else
-            echo "⚠️ Failed to delete X-Ray sampling rule $SAMPLING_RULE_NAME"
+            echo "⚠️ Failed to delete X-Ray sampling rule $SAMPLING_RULE_NAME (timeout or error)"
           fi
         else
           echo "✅ No existing X-Ray sampling rule found: $SAMPLING_RULE_NAME"
@@ -173,12 +175,13 @@ jobs:
           WEB_ACL_ID=$(echo "$WEB_ACL_INFO" | jq -r '.[0].Id')
           echo "Found existing WAF Web ACL $WEB_ACL_NAME with ID: $WEB_ACL_ID"
           
-          # Get lock token for deletion
-          LOCK_TOKEN=$(aws wafv2 get-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --query 'LockToken' --output text 2>/dev/null || echo "")
+          # Get fresh lock token for deletion (lock tokens change frequently)
+          FRESH_WEB_ACL_INFO=$(aws wafv2 get-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" 2>/dev/null || echo "{}")
+          LOCK_TOKEN=$(echo "$FRESH_WEB_ACL_INFO" | jq -r '.LockToken // empty')
           
           if [ -n "$LOCK_TOKEN" ]; then
-            echo "Attempting to delete WAF Web ACL..."
-            if aws wafv2 delete-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --lock-token "$LOCK_TOKEN" 2>/dev/null; then
+            echo "Attempting to delete WAF Web ACL with fresh lock token..."
+            if aws wafv2 delete-web-acl --scope "$WEB_ACL_SCOPE" --id "$WEB_ACL_ID" --name "$WEB_ACL_NAME" --lock-token "$LOCK_TOKEN" 2>/dev/null; then
               echo "✅ Successfully deleted WAF Web ACL $WEB_ACL_NAME"
             else
               echo "⚠️ Failed to delete WAF Web ACL $WEB_ACL_NAME (may be associated with resources)"
