@@ -39,7 +39,7 @@ A serverless URL shortener built using AWS Lambda, API Gateway, DynamoDB, S3, Cl
 
 > **Note**: This project runs on a student AWS account where resources are cleaned up daily. 
 > 
-> **🚀 Auto-Deployment**: GitHub Actions workflow automatically redeploys resources daily at 8:00 AM Singapore Time (SGT).
+> ** Auto-Deployment**: GitHub Actions workflow automatically redeploys resources daily at 8:00 AM Singapore Time (SGT).
 >
 > **Manual deployment**: Run `terraform apply` to redeploy if needed.
 
@@ -131,7 +131,7 @@ serverless-url-shortener/
 
 This project includes DevOps capabilities:
 
-### 📊 **Monitoring**
+### **Monitoring**
 - Comprehensive CloudWatch dashboards with business metrics
 - Alerting with anomaly detection
 - Cost tracking and optimization insights
