@@ -47,7 +47,7 @@ resource "aws_cloudwatch_dashboard" "url_shortener" {
           view   = "timeSeries"
         }
       },
-      
+
       # Lambda Function Performance
       {
         type   = "metric"
@@ -128,13 +128,13 @@ resource "aws_cloudwatch_dashboard" "url_shortener" {
         height = 6
         properties = {
           metrics = [
-            ["AWS/CloudFront", "Requests", "DistributionId", aws_cloudfront_distribution.frontend.id],
+            ["AWS/CloudFront", "Requests", "DistributionId", aws_cloudfront_distribution.cdn.id],
             [".", "BytesDownloaded", ".", "."],
             [".", "4xxErrorRate", ".", "."],
             [".", "5xxErrorRate", ".", "."]
           ]
           period = 300
-          region = "us-east-1"  # CloudFront metrics are always in us-east-1
+          region = "us-east-1" # CloudFront metrics are always in us-east-1
           title  = "CloudFront - Distribution Metrics"
           view   = "timeSeries"
         }
@@ -155,11 +155,11 @@ resource "aws_cloudwatch_dashboard" "url_shortener" {
             [".", ".", ".", ".", ".", "AmazonS3"],
             [".", ".", ".", ".", ".", "AmazonCloudFront"]
           ]
-          period = 86400  # Daily
-          stat   = "Maximum"
-          region = "us-east-1"  # Billing metrics are in us-east-1
-          title  = "Cost Breakdown by Service"
-          view   = "timeSeries"
+          period  = 86400 # Daily
+          stat    = "Maximum"
+          region  = "us-east-1" # Billing metrics are in us-east-1
+          title   = "Cost Breakdown by Service"
+          view    = "timeSeries"
           stacked = true
         }
       }
@@ -214,7 +214,7 @@ resource "aws_cloudwatch_metric_alarm" "high_api_latency" {
   namespace           = "AWS/ApiGatewayV2"
   period              = "300"
   statistic           = "Average"
-  threshold           = "1000"  # 1 second
+  threshold           = "1000" # 1 second
   alarm_description   = "This metric monitors API Gateway latency"
   alarm_actions       = [aws_sns_topic.alerts.arn]
 
